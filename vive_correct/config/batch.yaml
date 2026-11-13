@@ -1,0 +1,29 @@
+# 批次扫描、补全和安装标定的可调参数。
+# 某一次运行的 baseline、output、initial_mount、review 写在仓库 configs/*.yaml，不写在这里。
+# 若那份运行配置写了 stride，则覆盖下面的 scan.stride。
+
+scan:
+  # 缺失手搜索的帧间隔。只决定候选采样密度，不代替人工指定物理左右手。
+  stride: 5
+
+reconstruction:
+  # 双手补全时重新检查稳定性的窗口长度，单位帧。必须是大于等于 3 的奇数。
+  window: 7
+
+calibration:
+  # 姿态插值允许的最大时间间隔，秒。超出、外推或跨越无效时间戳时拒绝同步。
+  max_sync_gap_s: 0.05
+  # 头部与腕部 pose 的欧拉角解释。采集端约定仍需单独确认。
+  euler_sequence: xyz
+  euler_degrees: true
+  # 每只手最少的训练观测数和留出观测数。
+  min_train_observations: 6
+  min_holdout_observations: 2
+  # 留出观测的接受上限。
+  holdout_translation_m: 0.02
+  holdout_rotation_deg: 5.0
+  # 安装距离筛查上限，米。这是工程边界，不是实测的相机或标签安装尺寸。
+  max_head_camera_offset_m: 0.30
+  max_wrist_label_offset_m: 0.15
+  # 雅可比条件数上限。超过则认为该次拟合不可观测。
+  max_jacobian_condition: 10000.0

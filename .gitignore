@@ -1,0 +1,27 @@
+# Local data and generated artifacts
+outputs/
+samples
+/ego_data/L3-*/
+*.rrd
+*.log
+
+# Credentials and workstation settings
+.env
+.env.*
+!.env.example
+*.local.json
+.agents/
+.codex/
+.aws/
+
+# Python and tools
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.venv/
+venv/
+.mplconfig/
+.plot_deps/
+.DS_Store

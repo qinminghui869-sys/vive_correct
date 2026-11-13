@@ -1,0 +1,44 @@
+# 单条估计的可调参数。命令行显式传入的同名参数优先于本文件。
+# 数据路径不写在这里，由 --episode 和 --out 指定。
+
+selection:
+  # 稳定窗口长度，单位帧。必须是大于等于 3 的奇数。
+  window: 11
+  # 窗口中心的采样间隔，单位帧。间隔越大，越可能跳过更早的双手窗口。
+  stride: 10
+  # 只搜索视频前 N 帧。null 表示搜索整段。
+  max_frames: null
+  # 光流正反向误差上限，像素。
+  max_fb_px: 1.5
+  # 相邻帧角点位移的中位数上限，像素。
+  max_median_motion_px: 2.0
+  # 相邻帧角点位移的 P95 上限，像素。
+  max_p95_motion_px: 4.0
+  # 相对窗口中心的最大角点位移，像素。
+  max_excursion_px: 12.0
+  # 选帧时允许的最短投影边，像素。不得小于 8；低于 geometry.min_edge_px 时记为低分辨率预览。
+  min_projected_edge_px: 15.0
+
+geometry:
+  # 标签实物尺寸，米。长边对应参考 X，短边对应参考 Y。
+  label_length_m: 0.050
+  label_width_m: 0.030
+  # 四角重投影均方根上限，像素。超过则拒绝该姿态。
+  max_rms_px: 6.0
+  # 作为正式观测接受的最短投影边，像素。
+  min_edge_px: 15.0
+  # 叠图上坐标轴的绘制长度，米。不参与求解。
+  axis_length_m: 0.040
+  # 最终红轴与画面向左方向的最大夹角，度。超过则拒绝该姿态，不绘制坐标轴。
+  max_x_from_left_deg: 40.0
+  # 最终绿轴与画面向上方向的最大夹角，度。
+  max_y_from_up_deg: 40.0
+  # 最终蓝轴与相机指向标签的前向（视线 t）的最大夹角，度。
+  max_z_from_forward_deg: 50.0
+  # 角点扰动敏感性：高斯噪声标准差（像素）和重复次数。只用于报告，不是实测误差。
+  corner_noise_sigma_px: 0.5
+  corner_noise_trials: 128
+
+detector:
+  # cv 使用经典检测。ai 只在命令行同时给出 --frame 时才会请求视觉模型。
+  name: cv

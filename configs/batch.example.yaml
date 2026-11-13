@@ -1,0 +1,5 @@
+# Paths resolve relative to this file.
+baseline: ../outputs/baseline/gallery_manifest.json
+output: ../outputs/batch
+initial_mount: ../calibrations/left_camera_to_head_vive.json
+stride: 5

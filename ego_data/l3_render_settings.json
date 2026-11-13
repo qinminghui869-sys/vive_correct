@@ -1,0 +1,16 @@
+{
+  "description": "Frozen appearance of the currently accepted L3 A recording, 2026-11-10",
+  "render_options": {
+    "stride": 4,
+    "pose-markers": "axes",
+    "pose-axis-length": 0.05,
+    "head-axis-length": 0.03,
+    "frustum-depth": 0.022222222222222223,
+    "pose-axis-radius": 0.0025,
+    "frustum-radius": 0.0013,
+    "hand-point-radius": 0.006,
+    "cloud-point-radius": 0.0015,
+    "bone-radius": 0.002,
+    "hand-cloud-fade-radius": 0
+  }
+}
