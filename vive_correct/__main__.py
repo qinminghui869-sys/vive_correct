@@ -7,9 +7,13 @@ import sys
 def main(argv=None):
     argv = list(sys.argv[1:] if argv is None else argv)
     parser = argparse.ArgumentParser(prog="python3 -m vive_correct")
-    parser.add_argument("command", choices=("run", "view", "estimate", "batch"))
+    parser.add_argument("command", choices=("run", "view", "raw", "estimate", "batch"))
     parser.add_argument("arguments", nargs=argparse.REMAINDER)
     args = parser.parse_args(argv)
+    if args.command == "raw":
+        from vive_correct.raw_view import main as raw
+
+        return raw(args.arguments)
     if args.command == "view":
         from vive_correct.viewer import main as view
 

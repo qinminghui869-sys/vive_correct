@@ -3,6 +3,8 @@
 ## 模块
 
 - `vive_correct/run_dataset.py`：数据集发现、并行任务、缓存与运行入口。
+- `vive_correct/hand_repair.py`：屈指通道验证骨架手侧，校验既有安装假设并生成独立 Parquet。
+- `vive_correct/raw_view.py`：原始 Parquet 手点与深度点云查看，不调用模型或修复流程。
 - `vive_correct/rerun_export.py`：校验报告、转换原点、调用渲染器并发布完整录制。
 - `ego_data/vive_origin_alignment.py`、`tracking_sync.py`：原点到世界偏移、有限间隔时间插值。
 - `estimate/`：标签检测、几何求解、稳定性检查和绘图。

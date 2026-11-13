@@ -2,6 +2,7 @@
 
 import argparse
 import json
+import sys
 from pathlib import Path
 import av
 import numpy as np
@@ -17,7 +18,7 @@ ROOT = Path(__file__).resolve().parent
 CHAINS = [[0, 1, 2, 3, 4]] + [[0, s, s + 1, s + 2, s + 3] for s in (5, 9, 13, 17)]
 
 
-def log_hand_projection(path, points, camera, intrinsic, color):
+def log_hand_projection(path, points, camera, intrinsic, color, inspect=False, labels=False):
     rr.log(path, rr.Clear(recursive=True))
     points = (points - camera[:3, 3]) @ camera[:3, :3]
     valid = np.isfinite(points).all(axis=1) & (points[:, 2] > 0.01)
@@ -25,7 +26,18 @@ def log_hand_projection(path, points, camera, intrinsic, color):
     uv[valid, 0] = intrinsic["fx"] * points[valid, 0] / points[valid, 2] + intrinsic["cx"]
     uv[valid, 1] = intrinsic["fy"] * points[valid, 1] / points[valid, 2] + intrinsic["cy"]
     if valid.any():
-        rr.log(path, rr.Points2D(uv[valid], colors=color, radii=3))
+        rr.log(
+            path,
+            rr.Points2D(
+                uv[valid],
+                colors=color,
+                radii=3,
+                labels=[str(i) for i in np.flatnonzero(valid)] if labels else None,
+                show_labels=labels,
+            ),
+        )
+    if inspect and valid[CHAINS[0]].all():
+        rr.log(path + "/thumb", rr.LineStrips2D([uv[CHAINS[0]]], colors=[255, 40, 40], radii=2))
     strips = [uv[c] for c in CHAINS if valid[c].all()]
     if strips:
         rr.log(path + "/bones", rr.LineStrips2D(strips, colors=color, radii=1.5))
@@ -34,15 +46,25 @@ def log_hand_projection(path, points, camera, intrinsic, color):
 def table(path):
     t = pq.read_table(path)
     names = [n for n in t.column_names if n not in ("timestamp", "episode_index")]
+    if "hand_left_points" in str(path) or "hand_right_points" in str(path):
+        sys.path.insert(0, str(ROOT.parent))
+        from vive_correct.batch.hand_overlay import JOINTS
+
+        names = [f"{joint}_{axis}" for joint in JOINTS for axis in "xyz"]
     return t["timestamp"].to_numpy(), np.column_stack([t[n].to_numpy() for n in names])
 
 
-def nearest(stream, timestamp, tolerance):
+def sample_nearest(stream, timestamp, tolerance):
     times, values = stream
     i = np.searchsorted(times, timestamp)
     candidates = [j for j in (i - 1, i) if 0 <= j < len(times)]
     j = min(candidates, key=lambda j: abs(times[j] - timestamp))
-    return values[j] if abs(times[j] - timestamp) <= tolerance else np.full(values.shape[1], np.nan)
+    delta = float(times[j] - timestamp)
+    return (values[j] if abs(delta) <= tolerance else np.full(values.shape[1], np.nan)), delta
+
+
+def nearest(stream, timestamp, tolerance):
+    return sample_nearest(stream, timestamp, tolerance)[0]
 
 
 def frames(path, start, end, rgb=False):
@@ -158,7 +180,17 @@ def main():
         type=Path,
         help="JSON: T_head_rectified_camera (camera to tracker), head_euler_sequence, head_euler_degrees, eye_to_rectified_homography",
     )
+    ap.add_argument(
+        "--raw-hands",
+        action="store_true",
+        help="Read original hand rows, no offsets or hand interpolation",
+    )
+    ap.add_argument("--hand-points-dir", type=Path, help="Verified repaired Parquet directory")
     args = ap.parse_args()
+    if args.hand_points_dir and not args.raw_hands:
+        ap.error("--hand-points-dir requires --raw-hands")
+    if args.raw_hands and (args.wrist_calibration or args.hand_cloud_fade_radius):
+        ap.error("--raw-hands cannot use wrist correction or cloud thinning")
     if args.frames:
         args.frames = sorted(set(args.frames))
         args.start, args.end = min(args.frames), max(args.frames)
@@ -205,6 +237,17 @@ def main():
             "eye_gaze",
         )
     }
+    if args.hand_points_dir:
+        from vive_correct.batch.report_io import digest
+
+        repair_report = json.loads((args.hand_points_dir / "repair.json").read_text())
+        if Path(repair_report["episode"]).resolve() != args.dataset.resolve():
+            ap.error("Repaired hands belong to another episode")
+        for side in ("left", "right"):
+            path = args.hand_points_dir / f"observation.hand_{side}_points.parquet"
+            if digest(path) != repair_report["files"][side]["sha256"]:
+                ap.error("Repaired hand hash mismatch")
+            streams[f"hand_{side}_points"] = table(path)
     eye_times = pq.read_table(data / "observation.images.eye_rgb.parquet")["timestamp"].to_numpy()
     calibration = json.loads(args.calibration.read_text()) if args.calibration else {}
     wrist_calibration = (
@@ -233,7 +276,7 @@ def main():
     hand_diagnostics = {}
     if args.interpolate_tracking:
         for name, stream in streams.items():
-            if name == "eye_gaze":
+            if name == "eye_gaze" or (args.raw_hands and name != "head_pose"):
                 continue
             is_head = name == "head_pose"
             streams[name] = resample_tracking(
@@ -247,7 +290,7 @@ def main():
                 if is_head
                 else not args.pose_radians,
             )
-        for side in ("left", "right"):
+        for side in () if args.raw_hands else ("left", "right"):
             hand_diagnostics[side] = hand_mount_summary(
                 streams[f"hand_{side}_points"][1],
                 streams[f"{side}_wrist_pose"][1],
@@ -284,13 +327,20 @@ def main():
         + "; angle convention not yet verified from acquisition code. X red, Y green, Z blue."
     )
     status += "\nHand landmarks use the dataset mounting hypothesis; not independently calibrated.\nFrame indices are zero-based, inclusive. Distances: meters.\nNearest timestamps, max gap: poses/hands 5ms, gaze 15ms, eye video 25ms."
+    if args.raw_hands:
+        status = "RAW PARQUET: original world hand coordinates; no correction or hand interpolation.\nRed: thumb 1-4; cyan: left; pink: right. Camera mount is approximate.\nHead pose only: bounded interpolation. Other tracking: nearest row within 5 ms."
+    if args.hand_points_dir:
+        status = status.replace(
+            "RAW PARQUET: original world hand coordinates",
+            "REPAIRED SIDES: regenerated world hand coordinates",
+        )
     if wrist_calibration:
         status += (
             "\nWrist alignment applied to each wrist and all landmarks of that hand: "
             + json.dumps(wrist_calibration.get("wrists", {}))
         )
         status += "\n" + wrist_calibration.get("status", "")
-    if args.interpolate_tracking:
+    if args.interpolate_tracking and not args.raw_hands:
         status += "\nTracking synchronization: linear positions + rotation SLERP, brackets <=50ms, no extrapolation."
         status = status.replace("poses/hands 5ms, ", "")
     if args.hide_axes:
@@ -381,6 +431,18 @@ def main():
                     rrb.Spatial2DView(origin=depth_root + "/image", name="Rectified RGB"),
                     rrb.Spatial2DView(origin="eye", name="Eye camera + gaze"),
                     rrb.TextDocumentView(origin="notes", name="Calibration status"),
+                    *(
+                        [
+                            rrb.TextDocumentView(
+                                origin="sync/hand_left_points", name="Left sample timing"
+                            ),
+                            rrb.TextDocumentView(
+                                origin="sync/hand_right_points", name="Right sample timing"
+                            ),
+                        ]
+                        if args.raw_hands
+                        else []
+                    ),
                 ),
             )
         )
@@ -402,6 +464,7 @@ def main():
         ),
     ]
     counts = []
+    hand_sync = []
     skipped_frames = []
     local_thinning_removed = {}
     selected_frames = set(args.frames) if args.frames else None
@@ -473,9 +536,24 @@ def main():
             ("hand_left_points", [30, 220, 255]),
             ("hand_right_points", [255, 70, 140]),
         ]:
-            value = nearest(streams[name], ts, 0.005)
+            value, delta_s = sample_nearest(streams[name], ts, 0.005)
+            if args.raw_hands and "points" in name:
+                hand_sync.append(
+                    dict(
+                        frame=idx,
+                        stream=name,
+                        delta_ms=delta_s * 1000,
+                        valid=bool(np.isfinite(value).all()),
+                    )
+                )
+                rr.log(
+                    "sync/" + name,
+                    rr.TextDocument(
+                        f"frame={idx}; sample-depth={delta_s * 1000:.3f} ms; valid={np.isfinite(value).all()}"
+                    ),
+                )
             pts = value.reshape(-1, 3) if "points" in name else value[:3].reshape(1, 3)
-            if "head" not in name:
+            if "head" not in name and not args.raw_hands:
                 side = "left" if "left" in name else "right"
                 wrist_pose = nearest(streams[side + "_wrist_pose"], ts, 0.005)
                 pts = pts + correction_world(
@@ -513,8 +591,10 @@ def main():
                         pts[good],
                         colors=color,
                         radii=args.hand_point_radius if "points" in name else 0.015,
-                        labels=[label] if args.show_labels and "points" not in name else None,
-                        show_labels=args.show_labels and "points" not in name,
+                        labels=[str(i) for i in np.flatnonzero(good)]
+                        if args.raw_hands and "points" in name
+                        else ([label] if args.show_labels and "points" not in name else None),
+                        show_labels=args.show_labels,
                     ),
                 )
             if (
@@ -546,8 +626,23 @@ def main():
                     ),
                 )
             if "points" in name:
+                if args.raw_hands and np.isfinite(pts[CHAINS[0]]).all():
+                    rr.log(
+                        "world/" + name + "/thumb",
+                        rr.LineStrips3D(
+                            [pts[CHAINS[0]]], colors=[255, 40, 40], radii=args.bone_radius * 1.5
+                        ),
+                    )
                 if registered:
-                    log_hand_projection(depth_root + "/image/" + name, pts, camera, k, color)
+                    log_hand_projection(
+                        depth_root + "/image/" + name,
+                        pts,
+                        camera,
+                        k,
+                        color,
+                        args.raw_hands,
+                        args.show_labels,
+                    )
                 if args.show_uncorrected_hands:
                     original = value.reshape(21, 3)
                     raw_path = "world/" + name + "/source"
@@ -682,7 +777,14 @@ def main():
         skipped_missing_head_frames=skipped_frames,
         tracking_interpolated=args.interpolate_tracking,
         image_resolution=[width, height],
-        hand_alignment="translation_preview_not_rigid_calibration",
+        hand_alignment="repaired_sides_world_coordinates"
+        if args.hand_points_dir
+        else "raw_parquet_world_coordinates"
+        if args.raw_hands
+        else "translation_preview_not_rigid_calibration",
+        hand_points_dir=str(args.hand_points_dir) if args.hand_points_dir else None,
+        hand_sync=hand_sync,
+        hand_interpolated=args.interpolate_tracking and not args.raw_hands,
         source_hand_mount=hand_diagnostics,
         wrist_calibration=str(args.wrist_calibration) if args.wrist_calibration else None,
     )
