@@ -8,9 +8,9 @@ import zipfile
 import cv2
 import numpy as np
 
-from vive_correct.batch.automatic import run_automatic, write_json
+from vive_correct.batch.automatic import run_automatic
 from vive_correct.batch.device_axes import bind_anchor
-from vive_correct.batch.report_io import digest
+from vive_correct.batch.report_io import digest, write_json
 from vive_correct.estimate.openai_vision import load_config
 
 INDICES = {1, 4, 8, 11, 18, 23}

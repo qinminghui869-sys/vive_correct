@@ -1,4 +1,4 @@
-"""Run dataset estimation, Qwen review and delivery, or refresh an existing gallery."""
+"""Run label-center recovery with Astra defaults, or refresh an existing gallery."""
 
 from __future__ import annotations
 
@@ -15,49 +15,25 @@ if __package__ in (None, ""):
 
 import cv2
 
-from vive_correct.batch.report_io import digest
+from vive_correct.batch.report_io import digest, write_json
 from vive_correct.batch.bilateral_search import scan_manifest
 from vive_correct.batch.workflow import BatchConfig, run as run_batch
-from vive_correct.config import batch_settings
+from vive_correct.config import run_settings
+from vive_correct.dataset import (
+    VIDEO_SUFFIX,
+    TIMESTAMP_SUFFIX,
+    discover,
+    input_signature,
+    select_episodes,
+    source_hashes,
+    make_run_plan,
+    check_run_plan,
+)
 from vive_correct.estimate.find_stable_frame import SelectionConfig
-from vive_correct.estimate.geometry import VIDEO_KEY
 from vive_correct.estimate.sticker_pipeline import run as estimate
 from vive_correct.rerun_export import DEFAULT_MOUNT, check_dependencies, export_recordings
 
 DEFAULT_DATASET = Path("samples")
-VIDEO_SUFFIX = Path("videos/chunk-000") / VIDEO_KEY / "episode_000000.mp4"
-TIMESTAMP_SUFFIX = Path("data/chunk-000/episode_000000") / f"{VIDEO_KEY}.parquet"
-
-
-def write_json(path, data):
-    path.parent.mkdir(parents=True, exist_ok=True)
-    temporary = path.with_suffix(path.suffix + ".tmp")
-    temporary.write_text(json.dumps(data, ensure_ascii=False, indent=2) + "\n")
-    temporary.replace(path)
-
-
-def discover(dataset):
-    """Include incomplete episodes so missing videos are reported, not hidden."""
-    episodes = {
-        p.parents[3]
-        for p in dataset.rglob(f"{VIDEO_KEY}/episode_000000.mp4")
-        if p.relative_to(p.parents[3]) == VIDEO_SUFFIX
-    }
-    episodes.update(p.parent.parent for p in dataset.rglob("calibrations/rectify_params.yaml"))
-    return sorted(episodes)
-
-
-def input_signature(episode):
-    files = (VIDEO_SUFFIX, TIMESTAMP_SUFFIX, Path("calibrations/rectify_params.yaml"))
-    result = {}
-    for relative in files:
-        path = episode / relative
-        if path.is_file():
-            stat = path.stat()
-            result[str(relative)] = [stat.st_size, stat.st_mtime_ns]
-        else:
-            result[str(relative)] = None
-    return result
 
 
 def reusable(entry, signature):
@@ -125,17 +101,17 @@ def _estimate_one(episode, folder, config):
         return dict(status="failed", error=str(error))
 
 
-def estimate_dataset(dataset, output, config, jobs=1):
-    episodes = discover(dataset)
+def estimate_dataset(dataset, output, config, jobs=1, episodes_file=None):
+    episodes = select_episodes(dataset, episodes_file)
     if not episodes:
         raise ValueError(f"No episodes found under {dataset}")
-    package = Path(__file__).resolve().parent
-    code_files = sorted(package.rglob("*.py")) + sorted((package / "config").glob("*.yaml"))
     settings = {
         "dataset": str(dataset),
         "selection": asdict(config),
-        "source_hashes": {str(p.relative_to(package)): digest(p) for p in code_files},
+        "source_hashes": source_hashes(),
     }
+    if episodes_file is not None:
+        settings["selected_episodes"] = [p.relative_to(dataset).as_posix() for p in episodes]
     state_path = output / "batch_state.json"
     previous = json.loads(state_path.read_text()) if state_path.exists() else {}
     if previous and previous.get("settings") != settings:
@@ -212,8 +188,29 @@ def estimate_dataset(dataset, output, config, jobs=1):
 
 
 def main(argv=None):
+    profile_parser = argparse.ArgumentParser(add_help=False)
+    profile_parser.add_argument("--profile", choices=("astra", "legacy"), default="astra")
+    profile_args, _ = profile_parser.parse_known_args(argv)
     parser = argparse.ArgumentParser(description=__doc__)
+    try:
+        preset = run_settings(profile_args.profile)
+    except (ValueError, OSError) as error:
+        parser.error(str(error))
+    parser.add_argument(
+        "--profile",
+        choices=("astra", "legacy"),
+        default="astra",
+        help="astra (default): Astra adaptive recovery; legacy: previous API defaults",
+    )
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Print the effective plan without model requests or output writes (stage all)",
+    )
     parser.add_argument("--dataset", type=Path, default=DEFAULT_DATASET)
+    parser.add_argument(
+        "--episodes-file", type=Path, help="JSON list of episode paths relative to dataset"
+    )
     parser.add_argument(
         "--out", type=Path, required=True, help="Work directory; resume unchanged estimates"
     )
@@ -246,12 +243,11 @@ def main(argv=None):
         type=int,
         help="Limit initial estimates only; scan still covers the full video",
     )
-    parser.add_argument("--scan-stride", type=int, default=batch_settings()["scan"]["stride"])
+    parser.add_argument("--scan-stride", type=int)
     parser.add_argument(
         "--jobs",
         type=int,
-        default=12,
-        help="CPU workers (default: 12); model requests have a separate limit",
+        help="CPU workers; model requests have a separate limit",
     )
     parser.add_argument(
         "--reviewed-baseline", type=Path, help="Full, reviewed baseline manifest for finish"
@@ -263,12 +259,20 @@ def main(argv=None):
     parser.add_argument(
         "--model-config",
         type=Path,
-        help="Qwen connection JSON; defaults to local config or example config",
+        help="API connection JSON; used only with --transport api",
     )
-    parser.add_argument("--model", help="Override configured Qwen model name")
-    parser.add_argument("--model-jobs", type=int, default=3, help="Concurrent model requests")
-    parser.add_argument("--coarse-stride", type=int, default=15)
-    parser.add_argument("--first-pass", type=int, default=8)
+    parser.add_argument("--model", help="Override the exact recognition model name")
+    parser.add_argument("--transport", choices=("api", "codex"))
+    parser.add_argument("--codex-model", help="Exact model for Codex image review")
+    parser.add_argument(
+        "--tracker-guided-frames",
+        type=int,
+        default=None,
+        help="Additional evenly spaced Tracker-localized recovery frames (0 disables)",
+    )
+    parser.add_argument("--model-jobs", type=int, help="Concurrent model requests")
+    parser.add_argument("--coarse-stride", type=int)
+    parser.add_argument("--first-pass", type=int)
     parser.add_argument(
         "--axis-baseline",
         type=Path,
@@ -277,21 +281,42 @@ def main(argv=None):
     parser.add_argument(
         "--review-limit",
         type=int,
-        default=24,
         help="Maximum candidates sent for model review per episode; geometry failures excluded",
     )
-    parser.add_argument("--review-batch-size", type=int, default=1)
-    parser.add_argument("--model-timeout", type=int, default=180)
-    parser.add_argument("--model-retries", type=int, default=3)
-    parser.add_argument("--review-confidence", type=float, default=0.8)
+    parser.add_argument("--review-batch-size", type=int)
+    parser.add_argument("--model-timeout", type=int)
+    parser.add_argument("--model-retries", type=int)
+    parser.add_argument("--review-confidence", type=float)
+    parser.add_argument(
+        "--model-review",
+        "--qwen-review",
+        dest="qwen_review",
+        choices=("on", "off"),
+        default="on",
+        help="Disable model calls with off; image-half hand assignments remain unverified",
+    )
+    parser.add_argument(
+        "--fixed-candidates",
+        action="store_true",
+        help="Use only the coarse pool and full candidate budget, without adaptive search/early stop",
+    )
+    parser.set_defaults(**{k: v for k, v in preset.items() if k != "tracker_guided_frames"})
     args = parser.parse_args(argv)
+    if args.tracker_guided_frames is None:
+        args.tracker_guided_frames = (
+            preset["tracker_guided_frames"]
+            if args.qwen_review == "on" and not args.fixed_candidates and not args.baseline_only
+            else 0
+        )
     dataset, output = args.dataset.resolve(), args.out.resolve()
     try:
+        if args.dry_run and args.stage != "all":
+            raise ValueError("--dry-run requires --stage all")
         if args.baseline_only and (args.stage != "all" or not args.axis_baseline):
             raise ValueError("--baseline-only requires --stage all and --axis-baseline")
         render = args.rerun or args.open_rerun or args.stage == "rerun"
         initial_mount = (args.initial_mount or DEFAULT_MOUNT).resolve()
-        if render:
+        if render and not args.dry_run:
             if args.stage not in ("all", "finish", "rerun"):
                 raise ValueError("--rerun/--open-rerun require stage all, finish or rerun")
             check_dependencies(args.open_rerun)
@@ -309,6 +334,14 @@ def main(argv=None):
             raise ValueError("--out must be separate from the dataset directory")
         if args.scan_stride < 1:
             raise ValueError("--scan-stride must be positive")
+        if args.tracker_guided_frames < 0:
+            raise ValueError("--tracker-guided-frames must be nonnegative")
+        if args.tracker_guided_frames and (
+            args.fixed_candidates or args.qwen_review == "off" or args.baseline_only
+        ):
+            raise ValueError("Tracker-guided recovery requires model review and adaptive search")
+        if args.episodes_file:
+            select_episodes(dataset, args.episodes_file)
         cv2.setNumThreads(1)
         if args.stage == "finish":
             if not all((args.reviewed_baseline, args.review, args.initial_mount)):
@@ -344,30 +377,7 @@ def main(argv=None):
         config = SelectionConfig(stride=args.stride, window=args.window, max_frames=args.max_frames)
         if args.jobs < 1:
             raise ValueError("--jobs must be positive")
-        model_config = None
         if args.stage == "all":
-            from vive_correct.estimate.openai_vision import (
-                OpenAIConfig,
-                load_config,
-                _post_chat,
-                extract_json,
-            )
-            from vive_correct.batch.automatic import run_automatic
-
-            package = Path(__file__).resolve().parent
-            config_path = args.model_config or (
-                package / "openai.local.json"
-                if (package / "openai.local.json").exists()
-                else package / "openai.example.json"
-            )
-            if args.baseline_only:
-                model_config = OpenAIConfig("baseline-only-no-key", "", "baseline-replay", "none")
-            else:
-                model_config = load_config(model=args.model, config_path=config_path)
-                if model_config is None or "qwen" not in model_config.model.lower():
-                    raise ValueError(
-                        "all requires a Qwen model and API key; configure --model-config or environment variables"
-                    )
             if (
                 min(
                     args.review_limit,
@@ -383,47 +393,107 @@ def main(argv=None):
                 raise ValueError("Review limits, timeout and retries must be positive")
             if args.first_pass > args.review_limit:
                 raise ValueError("--first-pass must not exceed --review-limit")
+            if not 0 <= args.review_confidence <= 1:
+                raise ValueError("--review-confidence must be between 0 and 1")
+            if args.qwen_review == "off" and (args.axis_baseline or args.baseline_only):
+                raise ValueError("--model-review off cannot inherit reviewed baselines")
+        if args.dry_run:
+            print(
+                json.dumps(
+                    make_run_plan(args, dataset, config, initial_mount),
+                    ensure_ascii=False,
+                    indent=2,
+                )
+            )
+            return 0
+        model_config = None
+        transport = None
+        if args.stage == "all":
+            from vive_correct.estimate.openai_vision import (
+                OpenAIConfig,
+                load_config,
+                _post_chat,
+                extract_json,
+            )
+            from vive_correct.batch.automatic import run_automatic
+
+            package = Path(__file__).resolve().parent
+            config_path = args.model_config or (
+                package / "openai.local.json"
+                if (package / "openai.local.json").exists()
+                else package / "openai.example.json"
+            )
+            if args.qwen_review == "off":
+                model_config = OpenAIConfig("cv-only-no-key", "", "cv-only", "none")
+            elif args.baseline_only:
+                model_config = OpenAIConfig("baseline-only-no-key", "", "baseline-replay", "none")
+            elif args.transport == "codex":
+                from vive_correct.batch.codex_transport import CodexTransport
+
+                model_name = args.model or args.codex_model
+                model_config = OpenAIConfig(
+                    "codex-account-no-api-key", "codex://chatgpt-account", model_name, "codex_login"
+                )
+                transport = CodexTransport(
+                    output / "codex_requests", model=model_name, timeout=args.model_timeout
+                )
+            else:
+                model_config = load_config(model=args.model, config_path=config_path)
+                if model_config is None or "qwen" not in model_config.model.lower():
+                    raise ValueError(
+                        "all requires a Qwen model and API key; configure --model-config or environment variables"
+                    )
             if args.axis_baseline:
                 from vive_correct.batch.selection_policy import load_constraints
 
                 constraints = load_constraints(args.axis_baseline, retain_observations=True)
                 if args.baseline_only:
-                    for episode in discover(dataset):
+                    for episode in select_episodes(dataset, args.episodes_file):
                         sides = {
                             c["physical_side"] for c in constraints.get(str(episode.resolve()), [])
                         }
                         if sides != {"left", "right"}:
                             raise ValueError(
-                                f"Bilateral baseline missing for {episode}; omit --baseline-only to search with Qwen"
+                                f"Bilateral baseline missing for {episode}; omit --baseline-only to search with the model"
                             )
-            if not 0 <= args.review_confidence <= 1:
-                raise ValueError("--review-confidence must be between 0 and 1")
             if not initial_mount.is_file():
                 raise FileNotFoundError(f"Initial mounting file missing: {initial_mount}")
+            plan = make_run_plan(args, dataset, config, initial_mount, model_config)
+            check_run_plan(output, plan)
             # Fail before expensive video scanning when credentials/endpoint are unavailable.
-            if not args.baseline_only:
+            if not args.baseline_only and args.qwen_review == "on":
                 try:
-                    probe = _post_chat(
+                    probe_fn = transport or (
+                        lambda c, b: _post_chat(c, b, timeout=args.model_timeout)
+                    )
+                    probe = probe_fn(
                         model_config,
                         {
                             "model": model_config.model,
                             "max_tokens": 1024,
                             "enable_thinking": False,
                             "messages": [
-                                {"role": "user", "content": 'Return only JSON: {"ok": true}'}
+                                {
+                                    "role": "user",
+                                    "content": [
+                                        {"type": "text", "text": 'Return only JSON: {"ok": true}'}
+                                    ],
+                                }
                             ],
                         },
-                        timeout=args.model_timeout,
                     )
                     if extract_json(probe).get("ok") is not True:
                         raise ValueError("Unexpected model preflight response")
                 except Exception as error:
                     raise ValueError(
-                        "Qwen preflight failed: "
+                        "Model preflight failed: "
                         + str(error).replace(model_config.api_key, "[REDACTED]")
                     ) from error
             print(f"Full pipeline: model={model_config.model}, jobs={args.jobs}", flush=True)
-        entries = estimate_dataset(dataset, output, config, args.jobs)
+            write_json(output / "run_plan.json", plan)
+        entries = estimate_dataset(
+            dataset, output, config, args.jobs, episodes_file=args.episodes_file
+        )
         if args.stage in ("scan", "all"):
             scan_manifest(
                 output / "scan_manifest.json",
@@ -447,6 +517,10 @@ def main(argv=None):
                 axis_baseline=args.axis_baseline,
                 first_pass=args.first_pass,
                 fine_stride=args.scan_stride,
+                qwen_review=args.qwen_review == "on",
+                fixed_candidates=args.fixed_candidates,
+                transport=transport,
+                guided_frames=args.tracker_guided_frames,
             )
             failed = int(any(e["status"] in ("failed", "missing_input") for e in entries))
             if render:

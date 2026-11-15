@@ -21,7 +21,10 @@ def _select(data, keys):
 
 def compact_report(report, calibration):
     """Schema v6: pose, synchronization and essential uncertainty; no review history."""
-    result = _select(report, ("episode", "video_key", "origin", "axis_length_m", "mode"))
+    result = _select(
+        report,
+        ("episode", "video_key", "origin", "axis_length_m", "mode", "identity", "reviewer_type"),
+    )
     result.update(
         schema_version=6,
         camera=_select(report.get("camera", {}), ("K", "resolution", "distortion")),
@@ -55,6 +58,7 @@ def compact_report(report, calibration):
                 stability_passed=pose.get("stability", {}).get("passed"),
                 temporal_consistency_passed=pose.get("temporal_consistency", {}).get("passed"),
                 baseline_retained=bool(pose.get("baseline_retention")),
+                identity_source=pose.get("identity_review", {}).get("source", "unknown"),
             )
             # Unknown is null, never silently promoted to verified or unambiguous.
             for field in (

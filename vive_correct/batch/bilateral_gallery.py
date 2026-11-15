@@ -30,6 +30,7 @@ def build(root):
         if sha256(report_path) != entry["report_sha256"]:
             raise ValueError(f"Report changed: {report_path}")
         report = json.loads(report_path.read_text())
+        cv_only = report.get("reviewer_type") == "cv_only"
         has_axis_reviews |= any(
             "axis_review" in pose
             for observation in report["observations"]
@@ -94,7 +95,7 @@ def build(root):
             )
             cv2.putText(
                 panel,
-                axis_note
+                ("CV only: image-half identity UNVERIFIED | " if cv_only else axis_note)
                 + "Tag center | X red, Y green, Z blue | Separate panels: different times",
                 (15, 52),
                 cv2.FONT_HERSHEY_SIMPLEX,
@@ -114,6 +115,8 @@ def build(root):
                 cv2.LINE_AA,
             )
             descriptions.append("手部21点投影：" + hand_record["status"])
+            if cv_only:
+                descriptions.append("Qwen 已关闭；左右手仅按图像半区假设，标签身份未验证")
             panels.append(panel)
             descriptions.append(
                 f"{sides}：帧 {observation['frame_index']} / {quality_names.get(status, status)}"

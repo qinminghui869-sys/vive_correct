@@ -4,10 +4,12 @@ from contextlib import nullcontext
 import hashlib
 import json
 
+import cv2
+
 from vive_correct.batch.qwen_review import locate_wrist_trackers, matches_tracker, failure_kind
 from vive_correct.batch.selection_policy import choose_pair
 
-LOCATOR_VERSION = 1
+LOCATOR_VERSION = 2
 
 
 def verify_choices(
@@ -47,16 +49,17 @@ def verify_choices(
             pose["identity_guard"] = {"status": "user_reference", "physical_axes_verified": False}
             approved.add(token(side, item))
             continue
-        image = read_frame(episode, item["frame_index"])
-        key = {
-            "image_sha256": hashlib.sha256(image.tobytes()).hexdigest(),
-            "model": config.model,
-            "endpoint": config.base_url,
-            "version": LOCATOR_VERSION,
-        }
-        name = hashlib.sha256(json.dumps(key, sort_keys=True).encode()).hexdigest()
-        path = cache_dir / f"{name}.json"
+        path = None
         try:
+            image = read_frame(episode, item["frame_index"])
+            key = {
+                "image_sha256": hashlib.sha256(image.tobytes()).hexdigest(),
+                "model": config.model,
+                "endpoint": config.base_url,
+                "version": LOCATOR_VERSION,
+            }
+            name = hashlib.sha256(json.dumps(key, sort_keys=True).encode()).hexdigest()
+            path = cache_dir / f"{name}.json"
             if path.exists():
                 cached = json.loads(path.read_text())
                 if cached.get("rejection"):
@@ -87,7 +90,7 @@ def verify_choices(
                 pose["identity_guard"] = record
                 approved.add(token(side, item))
                 continue
-        except (RuntimeError, ValueError, KeyError, OSError) as error:
+        except (RuntimeError, ValueError, KeyError, OSError, cv2.error) as error:
             message = str(error).replace(config.api_key, "[REDACTED]")
             record = {
                 "frame_index": item["frame_index"],
@@ -96,7 +99,7 @@ def verify_choices(
                 "reason": message,
             }
             records.append(record)
-            if record["kind"] == "content_rejected":
+            if record["kind"] == "content_rejected" and path is not None:
                 cache_dir.mkdir(parents=True, exist_ok=True)
                 path.write_text(json.dumps({"signature": key, "rejection": message}))
             else:

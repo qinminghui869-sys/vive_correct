@@ -7,6 +7,31 @@ from vive_correct.batch.delivery import compact_report
 
 
 class CompactReportTests(unittest.TestCase):
+    def test_cv_only_identity_is_preserved_in_delivery(self):
+        report = dict(
+            identity="cv_image_half_unverified",
+            reviewer_type="cv_only",
+            observations=[
+                dict(
+                    frame_index=0,
+                    stickers={
+                        "left": dict(
+                            origin_camera_m=[0, 0, 1],
+                            axes_generated=False,
+                            identity_review={"source": "cv_image_half_unverified"},
+                        )
+                    },
+                )
+            ],
+        )
+        result = compact_report(report, {})
+        self.assertEqual(result["reviewer_type"], "cv_only")
+        self.assertEqual(result["identity"], "cv_image_half_unverified")
+        self.assertEqual(
+            result["observations"][0]["stickers"]["left"]["identity_source"],
+            "cv_image_half_unverified",
+        )
+
     def test_compact_pose_preserves_transform_and_quality(self):
         transform = np.eye(4)
         transform[:3, 3] = [0.1, 0.2, 1]

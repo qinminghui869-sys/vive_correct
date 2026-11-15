@@ -22,7 +22,7 @@ from vive_correct.batch.qwen_review import (
     failure_kind,
     validate_decisions,
 )
-from vive_correct.batch.report_io import digest
+from vive_correct.batch.report_io import digest, write_json
 from vive_correct.batch.selection_policy import (
     load_constraints,
     temporal_check,
@@ -39,13 +39,6 @@ from vive_correct.estimate.find_stable_frame import (
     measure_stability,
 )
 from vive_correct.estimate.visualization import draw_poses, save_image
-
-
-def write_json(path, data):
-    path.parent.mkdir(parents=True, exist_ok=True)
-    temporary = path.with_suffix(".tmp")
-    temporary.write_text(json.dumps(data, ensure_ascii=False, indent=2) + "\n")
-    temporary.replace(path)
 
 
 def diverse_candidates(candidates, limit):
@@ -128,7 +121,12 @@ def review_episode(
     constraints=(),
     first_pass=8,
     fine_stride=5,
+    qwen_review=True,
+    fixed_candidates=False,
+    guided_frames=0,
 ):
+    if not qwen_review and constraints:
+        raise ValueError("CV-only review cannot inherit reviewed identities")
     folder = work / "search" / f"{entry['index']:02d}_{Path(entry['episode']).name}"
     pool_path = folder / "candidates.json"
     if (
@@ -139,6 +137,7 @@ def review_episode(
     pool = json.loads(pool_path.read_text())
     if Path(pool["episode"]).resolve() != Path(entry["episode"]).resolve():
         raise ValueError("Candidate pool episode mismatch")
+    reviewer = "qwen" if "qwen" in config.model.lower() else "gpt"
     episode = Episode.load(entry["episode"])
     selection = SelectionConfig(window=window)
     report = json.loads(Path(entry["report"]).read_text())
@@ -146,9 +145,11 @@ def review_episode(
         observations=[],
         local_axes_convention=CONVENTION,
         axis_convention="Device-local axes fixed by per-wrist reference; no image-direction relabelling",
-        identity="qwen_visual_review_not_human_verified",
-        model=config.model,
-        reviewer_type="qwen_visual_review",
+        identity=f"{reviewer}_visual_review_not_human_verified"
+        if qwen_review
+        else "cv_image_half_unverified",
+        model=config.model if qwen_review else None,
+        reviewer_type=f"{reviewer}_visual_review" if qwen_review else "cv_only",
         human_verified=False,
         pose_accuracy_validated=False,
         same_time_propagation_validated=False,
@@ -234,6 +235,40 @@ def review_episode(
     refined = False
     requested_batches = cached_batches = 0
     identity_checks, localization_requests = [], 0
+    guided_search = None
+
+    def recovery_queue():
+        nonlocal guided_search
+        fine = refinement_pool(episode, work, entry["index"], pool, fine_stride)
+        extra = []
+        if qwen_review and guided_frames:
+            from vive_correct.batch.guided_search import guided_pool
+
+            guided_search = guided_pool(
+                episode,
+                cache_dir / "guided",
+                config,
+                read_frame,
+                count=guided_frames,
+                window=window,
+                timeout=timeout,
+                retries=retries,
+                transport=transport,
+                semaphore=semaphore,
+            )
+            extra = guided_search["candidates"]
+            errors.extend(guided_search["errors"])
+        proposals = extra + diverse_candidates(fine["candidates"], len(fine["candidates"]))
+        return [
+            c
+            for c in proposals
+            if (
+                c["frame_index"],
+                tuple(np.round(np.asarray(c["pose"]["image_corners_px"]).mean(0), 1)),
+            )
+            not in consumed
+        ]
+
     while True:
         while queue and model_candidates < limit:
             group, queue = queue[:batch_size], queue[batch_size:]
@@ -302,7 +337,19 @@ def review_episode(
                 model_items = [i for i in prepared if not i["candidate"].get("constraint_source")]
                 model_items = model_items[: max(0, limit - model_candidates)]
                 model_candidates += len(model_items)
-                if model_items:
+                if model_items and not qwen_review:
+                    response.extend(
+                        dict(
+                            candidate_id=i["id"],
+                            physical_side=i["candidate"]["side_hint"],
+                            is_label=True,
+                            clear=True,
+                            confidence=None,
+                            visible_features="CV proposal; image-half side assumption, identity unverified",
+                        )
+                        for i in model_items
+                    )
+                if model_items and qwen_review:
                     key = dict(
                         signature,
                         candidates=[
@@ -358,7 +405,7 @@ def review_episode(
                         decision["is_label"]
                         and decision["clear"]
                         and side in accepted
-                        and decision["confidence"] >= confidence
+                        and (not qwen_review or decision["confidence"] >= confidence)
                     ):
                         continue
                     item = by_id[decision["candidate_id"]]
@@ -381,8 +428,10 @@ def review_episode(
                             if pose.get("axes_generated", True)
                             else "axes_not_generated",
                             axis_review={
-                                "reviewer_type": "qwen_identity_only",
-                                "model": config.model,
+                                "reviewer_type": f"{reviewer}_identity_only"
+                                if qwen_review
+                                else "cv_only",
+                                "model": config.model if qwen_review else None,
                                 "old_from_new": None,
                                 "method": "Identity only; device installation reference missing",
                                 "human_verified": False,
@@ -393,11 +442,16 @@ def review_episode(
                         true_vive_origin_calibrated=False,
                         T_label_vive=None,
                         source_candidate_id=item["id"],
+                        proposal_source=source.get("proposal_source", "full_frame_cv"),
                         identity_review={
                             "source": "user_reference"
                             if source.get("constraint_source")
-                            else "qwen",
-                            "model": None if source.get("constraint_source") else config.model,
+                            else reviewer
+                            if qwen_review
+                            else "cv_image_half_unverified",
+                            "model": config.model
+                            if qwen_review and not source.get("constraint_source")
+                            else None,
                             "visible_features": decision["visible_features"],
                         },
                     )
@@ -413,59 +467,59 @@ def review_episode(
                 flush=True,
             )
             if (
-                not refined
+                not fixed_candidates
+                and not refined
                 and model_candidates < limit
                 and (not queue or model_candidates >= first_pass)
                 and not good_pair(accepted)
             ):
                 refined = True
-                fine = refinement_pool(episode, work, entry["index"], pool, fine_stride)
-                queue = diverse_candidates(fine["candidates"], len(fine["candidates"]))
-                queue = [
-                    c
-                    for c in queue
-                    if (
-                        c["frame_index"],
-                        tuple(np.round(np.asarray(c["pose"]["image_corners_px"]).mean(0), 1)),
-                    )
-                    not in consumed
-                ]
+                queue = recovery_queue()
             if (
-                not refined
+                not fixed_candidates
                 and model_candidates >= first_pass
                 and good_pair(accepted)
                 and not any(c.get("constraint_source") for c in queue)
             ):
                 break
-        choices, checks, identity_errors, location_count = verify_choices(
-            accepted,
-            episode,
-            config,
-            cache_dir / "localization",
-            read_frame,
-            semaphore=semaphore,
-            timeout=timeout,
-            retries=retries,
-            transport=transport,
-        )
+        if qwen_review:
+            choices, checks, identity_errors, location_count = verify_choices(
+                accepted,
+                episode,
+                config,
+                cache_dir / "localization",
+                read_frame,
+                semaphore=semaphore,
+                timeout=timeout,
+                retries=retries,
+                transport=transport,
+            )
+        else:
+            choices, checks, identity_errors, location_count = choose_pair(accepted), [], [], 0
         errors.extend(identity_errors)
         identity_checks.extend(checks)
         localization_requests += location_count
+        # Do not repeatedly select a device mismatch on subsequent recovery passes.
+        rejected_identity = {
+            (c["side"], c["frame_index"]) for c in checks if c.get("passed") is False
+        }
+        for side in accepted:
+            accepted[side] = [
+                i for i in accepted[side] if (side, i["frame_index"]) not in rejected_identity
+            ]
+        if (
+            not fixed_candidates
+            and refined
+            and len(choices) < 2
+            and queue
+            and model_candidates < limit
+        ):
+            continue
         # If independent localization invalidates an otherwise good coarse pair,
         # use the remaining budget for fine search instead of silently stopping.
-        if not refined and model_candidates < limit and len(choices) < 2:
+        if not fixed_candidates and not refined and model_candidates < limit and len(choices) < 2:
             refined = True
-            fine = refinement_pool(episode, work, entry["index"], pool, fine_stride)
-            queue = diverse_candidates(fine["candidates"], len(fine["candidates"]))
-            queue = [
-                c
-                for c in queue
-                if (
-                    c["frame_index"],
-                    tuple(np.round(np.asarray(c["pose"]["image_corners_px"]).mean(0), 1)),
-                )
-                not in consumed
-            ]
+            queue = recovery_queue()
             if queue:
                 continue
         break
@@ -506,7 +560,7 @@ def review_episode(
         observation.update(
             image=str(raw_path),
             overlay=str(overlay_path),
-            reviewer_type="qwen_identity_only",
+            reviewer_type=f"{reviewer}_identity_only" if qwen_review else "cv_only",
             human_verified=False,
             quality_status="conditional_motion"
             if "conditional_motion" in statuses
@@ -516,6 +570,17 @@ def review_episode(
         )
         report["observations"].append(observation)
     hands = sorted(choices)
+    stop_reason = (
+        "baseline_replay"
+        if limit == 0
+        else "bilateral_stable"
+        if len(choices) == 2 and good_pair({s: [i] for s, i in choices.items()})
+        else "candidate_budget_exhausted"
+        if model_candidates >= limit
+        else "candidate_pool_exhausted"
+        if not queue
+        else "bounded_identity_review"
+    )
     report.update(
         mode="both_hands_same_frame"
         if any(len(o["stickers"]) == 2 for o in report["observations"])
@@ -527,12 +592,27 @@ def review_episode(
         model_review={
             "candidate_count": len(pool["candidates"]),
             "review_limit": limit,
+            "first_pass": first_pass,
+            "review_batch_size": batch_size,
+            "fine_stride": fine_stride,
+            "confidence_threshold": confidence,
+            "stop_reason": stop_reason,
+            "missing_hands": sorted({"left", "right"} - set(hands)),
             "selected_for_review": processed,
-            "model_candidates": model_candidates,
+            "model_candidates": model_candidates if qwen_review else 0,
+            "evaluated_candidates": model_candidates,
+            "qwen_review_enabled": qwen_review,
+            "fixed_candidates": fixed_candidates,
             "retained_baseline_hands": [
                 s for s, i in choices.items() if i["pose"].get("baseline_retention")
             ],
             "refined_search": refined,
+            "guided_search": {
+                "enabled": bool(guided_frames),
+                "requests": guided_search["requests"] if guided_search else 0,
+                "candidate_count": len(guided_search["candidates"]) if guided_search else 0,
+                "frames": guided_search["frames"] if guided_search else [],
+            },
             "requested_batches": requested_batches,
             "cached_batches": cached_batches,
             "localization_requests": localization_requests,
@@ -554,7 +634,9 @@ def review_episode(
             "cached_batches": cached_batches,
             "localization_requests": localization_requests,
             "identity_checks": identity_checks,
-            "scope": "bounded identity review, no model axis rotation",
+            "scope": "bounded identity review, no model axis rotation"
+            if qwen_review
+            else "CV only; image-half identity unverified",
             "human_verified": False,
         },
     )
@@ -566,7 +648,11 @@ def review_episode(
         "hands": hands,
         "missing_hands": sorted({"left", "right"} - set(hands)),
         "mode": report["mode"],
-        "status": "review_error" if errors else "model_reviewed" if hands else "no_accepted_label",
+        "status": "review_error"
+        if errors
+        else ("model_reviewed" if qwen_review else "cv_only_unverified")
+        if hands
+        else "no_accepted_label",
     }
 
 
@@ -587,6 +673,9 @@ def run_automatic(
     axis_baseline=None,
     first_pass=8,
     fine_stride=5,
+    qwen_review=True,
+    fixed_candidates=False,
+    guided_frames=0,
 ):
     work = Path(work).resolve()
     entries = json.loads((work / "scan_manifest.json").read_text())["entries"]
@@ -611,6 +700,9 @@ def run_automatic(
                 constraints=constraints.get(str(Path(entry["episode"]).resolve()), ()),
                 first_pass=first_pass,
                 fine_stride=fine_stride,
+                qwen_review=qwen_review,
+                fixed_candidates=fixed_candidates,
+                guided_frames=guided_frames,
             )
         except Exception as error:
             # Publish a failure record rather than quietly dropping an episode.
@@ -677,9 +769,22 @@ def run_automatic(
             "model_jobs": model_jobs,
             "first_pass": first_pass,
             "review_limit": limit,
+            "review_batch_size": batch_size,
+            "fine_stride": fine_stride,
+            "model_timeout": timeout,
+            "model_retries": retries,
             "confidence_threshold": confidence,
             "stability_window": window,
             "model_review_is_not_human_verification": True,
+            "qwen_review_enabled": qwen_review,
+            "fixed_candidates": fixed_candidates,
+            "guided_frames": guided_frames,
+            "run_plan": {
+                "path": str(work / "run_plan.json"),
+                "sha256": digest(work / "run_plan.json"),
+            }
+            if (work / "run_plan.json").is_file()
+            else None,
         },
     )
     build(batch)

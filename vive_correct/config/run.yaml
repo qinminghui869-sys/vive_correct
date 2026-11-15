@@ -1,0 +1,32 @@
+# 统一运行入口的预设；显式 CLI 参数覆盖这里的值。
+# astra 使用 GPT-6Astra 与局部补扫；legacy 保留旧 API 运行方式。
+# 自动补扫默认开启。关闭模型、基线回放或 fixed-candidates 时，不启用局部补扫。
+astra:
+  transport: codex
+  codex_model: gpt-6-astra
+  jobs: 10
+  model_jobs: 4
+  coarse_stride: 15
+  scan_stride: 3
+  first_pass: 4
+  review_limit: 24
+  review_batch_size: 4
+  model_timeout: 300
+  model_retries: 2
+  review_confidence: 0.8
+  tracker_guided_frames: 6
+
+legacy:
+  transport: api
+  codex_model: gpt-6-astra
+  jobs: 12
+  model_jobs: 3
+  coarse_stride: 15
+  scan_stride: 5
+  first_pass: 8
+  review_limit: 24
+  review_batch_size: 1
+  model_timeout: 180
+  model_retries: 3
+  review_confidence: 0.8
+  tracker_guided_frames: 0

@@ -1,6 +1,7 @@
 """Load the commented YAML defaults used by estimate and batch."""
 
 from pathlib import Path
+import math
 
 import yaml
 
@@ -78,6 +79,49 @@ _FLOATS = {
     "max_jacobian_condition",
 }
 _OPTIONAL = {"max_frames"}
+
+_RUN_TYPES = {
+    "transport": str,
+    "codex_model": str,
+    "jobs": int,
+    "model_jobs": int,
+    "coarse_stride": int,
+    "scan_stride": int,
+    "first_pass": int,
+    "review_limit": int,
+    "review_batch_size": int,
+    "model_timeout": int,
+    "model_retries": int,
+    "review_confidence": float,
+    "tracker_guided_frames": int,
+}
+
+
+def run_settings(profile="astra"):
+    """Load a complete preset; reject misspelled or invalid tuning parameters."""
+    document = yaml.safe_load((_DIR / "run.yaml").read_text(encoding="utf-8"))
+    if not isinstance(document, dict) or set(document) != {"astra", "legacy"}:
+        raise ValueError("run.yaml: expected astra and legacy profiles")
+    if profile not in document:
+        raise ValueError(f"Unknown run profile: {profile}")
+    for name, values in document.items():
+        if not isinstance(values, dict) or set(values) != set(_RUN_TYPES):
+            raise ValueError(f"run.yaml: {name} expected keys {sorted(_RUN_TYPES)}")
+        for key, kind in _RUN_TYPES.items():
+            value = values[key]
+            if kind is float:
+                valid = type(value) in (int, float) and math.isfinite(value) and 0 <= value <= 1
+            elif kind is int:
+                valid = type(value) is int and value >= (0 if key == "tracker_guided_frames" else 1)
+            else:
+                valid = isinstance(value, str) and bool(value.strip())
+            if not valid:
+                raise ValueError(f"run.yaml: invalid {name}.{key}")
+        if values["transport"] not in {"api", "codex"}:
+            raise ValueError(f"run.yaml: invalid {name}.transport")
+        if values["first_pass"] > values["review_limit"]:
+            raise ValueError(f"run.yaml: {name}.first_pass exceeds review_limit")
+    return dict(document[profile])
 
 
 def _load(name, schema, doc=None):

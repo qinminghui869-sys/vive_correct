@@ -211,6 +211,41 @@ class ReviewIntegrationTests(unittest.TestCase):
 
 
 class IdentityGuardTests(unittest.TestCase):
+    def test_frame_decode_error_preserves_other_checked_hand(self):
+        from types import SimpleNamespace
+        from vive_correct.batch.identity_guard import verify_choices
+
+        left, right = item(1), item(2)
+        for candidate in (left, right):
+            candidate["pose"]["image_corners_px"] = [[30, 30], [70, 30], [70, 60], [30, 60]]
+        episode = SimpleNamespace(camera=SimpleNamespace(resolution=(100, 100)))
+        config = SimpleNamespace(model="gpt-6-astra", base_url="test", api_key="secret")
+
+        def read_frame(ep, frame):
+            if frame == 1:
+                raise ValueError("Cannot decode selected frame")
+            return np.zeros((100, 100, 3), np.uint8)
+
+        with (
+            TemporaryDirectory() as tmp,
+            patch(
+                "vive_correct.batch.identity_guard.locate_wrist_trackers",
+                return_value={"left": None, "right": {"bbox": [250, 250, 750, 650]}},
+            ),
+        ):
+            selected, records, errors, count = verify_choices(
+                {"left": [left], "right": [right]},
+                episode,
+                config,
+                Path(tmp),
+                read_frame,
+            )
+        self.assertEqual(set(selected), {"right"})
+        self.assertEqual(len(errors), 1)
+        self.assertEqual(errors[0]["frame_index"], 1)
+        self.assertEqual(count, 1)
+        self.assertTrue(records[-1]["passed"])
+
     def test_candidate_outside_independently_localized_tracker_is_rejected(self):
         from vive_correct.batch.qwen_review import matches_tracker
 

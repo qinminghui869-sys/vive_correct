@@ -21,6 +21,7 @@
 - `mode`：`both_hands_same_frame`、`separate_frames`、`single_hand` 或 `no_usable_label`。
 - `mount_calibration`：`accepted` 与 `reason`，表示安装标定结论。
 - `observations`：选中帧列表；无有效观测时为空。
+- `identity`、`reviewer_type`：身份来源。关闭模型复核时为 `cv_image_half_unverified` / `cv_only`，左右手仅为图像半区假设。
 
 ## 每帧字段
 
@@ -32,6 +33,7 @@
 
 - `local_axes_convention`：`device_fixed_anchor` 表示设备固定参考轴，`unresolved` 表示没有可用安装方向；其他来源约定不能自动当作设备参考。
 - `origin_camera_m`：标签中心在相机系中的 `[x,y,z]`，单位米。安装方向未确认时仍保留通过几何拟合的原点。
+- `identity_source`：身份判断来源；`cv_image_half_unverified` 表示未经过模型或人工确认，`unknown` 表示历史报告没有记录来源。
 - `axes_generated`：是否生成完整参考坐标轴；不等于物理轴向已经验证。
 - `axes_failure_reason`：未生成原因，例如 `installation_reference_missing`（缺少安装参考）、`use_original_device_reference`（需提供统一换轴前的参考）；成功时为 `null`。
 - `T_camera_local`：最终位姿矩阵；`axes_generated=false` 时为 `null`，不得用单位旋转替代。
@@ -57,12 +59,12 @@ import numpy as np
 with open(report_path) as f:
     report = json.load(f)
 
-for observation in report['observations']:
-    for side, pose in observation['stickers'].items():
-        origin_m = np.asarray(pose['origin_camera_m'], dtype=float)
-        if not pose['axes_generated']:
+for observation in report["observations"]:
+    for side, pose in observation["stickers"].items():
+        origin_m = np.asarray(pose["origin_camera_m"], dtype=float)
+        if not pose["axes_generated"]:
             continue  # 可以使用原点；没有可用的 XYZ 轴或完整姿态。
-        T = np.asarray(pose['T_camera_local'], dtype=float)
+        T = np.asarray(pose["T_camera_local"], dtype=float)
         x_axis, y_axis, z_axis = T[:3, 0], T[:3, 1], T[:3, 2]
         # 使用 observation['timestamp_s'] 同步源数据。
         # 依用途检查质量、方向和标定状态，不凭单一 verified 字段放行。
