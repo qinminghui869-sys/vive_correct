@@ -51,6 +51,10 @@ class OpenFileTests(unittest.TestCase):
         self.assertIn("sticker_pipeline.py", stickers[1])
         self.assertIn(str(self.episode), stickers)
 
+    def test_manus_entry_does_not_require_depth(self):
+        command = open_file.command_for(self.episode, tool="manus")
+        self.assertEqual(command[1:3], [str(ROOT / "open_manus.py"), str(self.episode)])
+
 
 if __name__ == "__main__":
     unittest.main()

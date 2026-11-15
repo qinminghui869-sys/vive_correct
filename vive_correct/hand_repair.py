@@ -139,3 +139,18 @@ def repair(episode, output):
         report["files"][side].update(path=str(path), sha256=digest(path))
     (output / "repair.json").write_text(json.dumps(report, indent=2) + "\n")
     return output
+
+
+def prepare_hands(episode, output):
+    """Keep uncertain data viewable, but never publish a guessed side assignment."""
+    try:
+        directory = repair(episode, output)
+    except (ValueError, KeyError, OSError) as error:
+        return None, {"status": "unverified_source_preview", "reason": str(error)}
+    report = json.loads((directory / "repair.json").read_text())
+    return directory, {
+        "status": "verified_by_ergonomics",
+        "mapping": report["mapping"],
+        "report": str(directory / "repair.json"),
+        "mounting": report["mounting"],
+    }

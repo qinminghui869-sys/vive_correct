@@ -9,6 +9,7 @@ import sys
 
 from vive_correct.batch.report_io import digest
 from vive_correct.viewer import launch
+from vive_correct.hand_repair import prepare_hands
 
 ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_MOUNT = ROOT / "calibrations/left_camera_to_head_vive.json"
@@ -50,9 +51,15 @@ def export_recordings(work, calibration, *, open_viewer=False):
                 report = manifest_path.parent / report
             if digest(report) != entry["report_sha256"]:
                 raise ValueError("Reviewed report hash mismatch")
-            alignment = build_alignment(episode, report, calibration)
+            alignment = build_alignment(episode, report, calibration, refine_depth=True)
             alignment_path = folder / "wrist_alignment.json"
             alignment_path.write_text(json.dumps(alignment, ensure_ascii=False, indent=2) + "\n")
+            hands, hand_status = prepare_hands(episode, folder / "hands")
+            row["hands"] = hand_status
+            hand_status_path = folder / "hand_status.json"
+            hand_status_path.write_text(
+                json.dumps(hand_status, ensure_ascii=False, indent=2) + "\n"
+            )
             times = pq.read_table(
                 episode / "data/chunk-000/episode_000000" / f"{DEPTH_KEY}.parquet"
             )["timestamp"]
@@ -86,6 +93,9 @@ def export_recordings(work, calibration, *, open_viewer=False):
                 "--output",
                 str(pending),
             ]
+            command += ["--hand-status", str(hand_status_path)]
+            if hands:
+                command += ["--hand-points-dir", str(hands)]
             if not alignment["pose_degrees"]:
                 command.append("--pose-radians")
             print(f"Render: {episode.name} (0–{len(times) - 1}); log: {log}", flush=True)
@@ -102,6 +112,8 @@ def export_recordings(work, calibration, *, open_viewer=False):
             row.update(
                 status="complete",
                 recording=str(recording),
+                display_mode=stats.get("mode", "registered_depth"),
+                vive_correction_displayed=stats.get("mode") != "rgb_manus_only",
                 frames=stats["frames"],
                 skipped_frames=stats["skipped_missing_head_frames"],
                 alignment=str(alignment_path),

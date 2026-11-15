@@ -23,7 +23,9 @@ def pose_stream(path):
     )
 
 
-def build_alignment(episode, report_path, calibration_path):
+def build_alignment(
+    episode, report_path, calibration_path, *, refine_depth=False, require_bilateral=True
+):
     report = json.loads(report_path.read_text())
     calibration = json.loads(calibration_path.read_text())
     if Path(report["episode"]).resolve() != episode.resolve():
@@ -48,6 +50,11 @@ def build_alignment(episode, report_path, calibration_path):
         or not np.isclose(np.linalg.det(mount[:3, :3]), 1)
     ):
         raise ValueError("Camera mounting must be a finite rigid 4x4 transform")
+    refinements = {}
+    if refine_depth:
+        from ego_data.depth_targets import refine_targets
+
+        refinements = refine_targets(episode, report)
     samples = []
     for observation in report["observations"]:
         ts = observation["timestamp_s"]
@@ -68,6 +75,9 @@ def build_alignment(episode, report_path, calibration_path):
             origin = np.asarray(item["origin_camera_m"], dtype=float)
             if origin.shape != (3,) or not np.isfinite(origin).all() or origin[2] <= 0:
                 raise ValueError("Invalid camera origin")
+            refinement = refinements.get((frame, side), {"status": "pnp_preview"})
+            if refinement["status"] == "depth_plane_refined":
+                origin = np.asarray(refinement["origin_camera_m"])
             wrist = resample_tracking(
                 streams[side + "_wrist"], [ts], pose=True, sequence=sequence, degrees=degrees
             )[1][0]
@@ -85,13 +95,16 @@ def build_alignment(episode, report_path, calibration_path):
                     delta_world_m=(target - wrist[:3]).tolist(),
                     wrist_rotation=wrist_matrix[:3, :3].tolist(),
                     quality_status=item.get("quality_status"),
+                    depth_refinement=refinement,
                 )
             )
     wrists = {}
     for side in ("left", "right"):
         selected = [s for s in samples if s["side"] == side]
         if not selected:
-            raise ValueError(f"No repaired origin for {side}")
+            if require_bilateral:
+                raise ValueError(f"No repaired origin for {side}")
+            continue
         offset, residuals = fit_samples(selected, "world")
         wrists[side] = dict(
             model="world",
@@ -100,7 +113,10 @@ def build_alignment(episode, report_path, calibration_path):
             sample_count=len(selected),
             residuals_m=residuals,
         )
+    if not wrists:
+        raise ValueError("No repaired wrist origins")
     return dict(
+        depth_refinement_enabled=refine_depth,
         version=2,
         episode=str(episode.resolve()),
         camera_calibration=calibration,

@@ -39,17 +39,22 @@ class HandStream:
     def __init__(self, path):
         columns = ["timestamp"] + [f"{joint}_{axis}" for joint in JOINTS for axis in "xyz"]
         table = pq.read_table(path, columns=columns)
-        self.times = table["timestamp"].to_numpy().astype(float)
-        self.points = np.column_stack([table[c].to_numpy() for c in columns[1:]]).reshape(-1, 21, 3)
-        if (
-            not len(self.times)
-            or not np.isfinite(self.times).all()
-            or np.any(np.diff(self.times) <= 0)
-        ):
-            raise ValueError("Hand timestamps must be finite and strictly increasing")
+        from ego_data.tracking_sync import normalize_tracking
+
+        (self.times, values), self.timestamp_report = normalize_tracking(
+            (
+                table["timestamp"].to_numpy(),
+                np.column_stack([table[c].to_numpy() for c in columns[1:]]),
+            )
+        )
+        self.points = values.reshape(-1, 21, 3)
 
     def at(self, timestamp, tolerance=0.005):
-        if not np.isfinite(timestamp) or not self.times[0] <= timestamp <= self.times[-1]:
+        if (
+            not len(self.times)
+            or not np.isfinite(timestamp)
+            or not self.times[0] <= timestamp <= self.times[-1]
+        ):
             raise ValueError("Hand timestamp outside stream")
         right = int(np.searchsorted(self.times, timestamp))
         indices = [i for i in (right - 1, right) if 0 <= i < len(self.times)]

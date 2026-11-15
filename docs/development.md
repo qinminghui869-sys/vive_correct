@@ -6,9 +6,12 @@
 - `vive_correct/dataset.py`：样本发现、输入签名、运行计划与恢复检查。
 - `vive_correct/config/run.yaml`：Astra 与 legacy 预设；CLI 显式参数覆盖预设。
 - `vive_correct/hand_repair.py`：屈指通道验证骨架手侧，校验既有安装假设并生成独立 Parquet。
-- `vive_correct/raw_view.py`：原始 Parquet 手点与深度点云查看，不调用模型或修复流程。
+- `vive_correct/raw_view.py`：手部数据查看入口，可核查并重建侧别，不调用识别模型。
 - `vive_correct/rerun_export.py`：校验报告、转换原点、调用渲染器并发布完整录制。
-- `ego_data/vive_origin_alignment.py`、`tracking_sync.py`：原点到世界偏移、有限间隔时间插值。
+- `ego_data/vive_origin_alignment.py`、`depth_targets.py`：标签深度校验与世界偏移。
+- `ego_data/tracking_sync.py`：时间戳清理、最近匹配与有限间隔插值。
+- `ego_data/manus_view.py`、`render_rerun.py`：局部节点/RGB 回退与完整点云展示。
+- `ego_data/hand_calibration.py`：刚体安装标定与独立帧验证。
 - `estimate/`：标签检测、几何求解、稳定性检查和绘图。
 - `batch/automatic.py`：模型复核、补扫、观测选择和交付编排。
 - `batch/qwen_review.py`、`identity_guard.py`：标签身份与独立设备定位。

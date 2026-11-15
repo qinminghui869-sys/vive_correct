@@ -10,11 +10,15 @@ import pyarrow.parquet as pq
 import rerun as rr
 import rerun.blueprint as rrb
 from scipy.spatial.transform import Rotation
-from wrist_alignment import correction_world, hand_mount_summary
+from wrist_alignment import correction_world, hand_mount_summary, pose_matrix
+from hand_calibration import apply_mount, rigid_matrix
 from cloud_visibility import local_hand_cloud_mask
-from tracking_sync import resample_tracking
+from tracking_sync import resample_tracking, normalize_tracking, sample_nearest
+from manus_view import log_nodes
 
 ROOT = Path(__file__).resolve().parent
+sys.path.insert(0, str(ROOT.parent))
+TRACKING_REPORTS = {}
 CHAINS = [[0, 1, 2, 3, 4]] + [[0, s, s + 1, s + 2, s + 3] for s in (5, 9, 13, 17)]
 
 
@@ -51,16 +55,14 @@ def table(path):
         from vive_correct.batch.hand_overlay import JOINTS
 
         names = [f"{joint}_{axis}" for joint in JOINTS for axis in "xyz"]
-    return t["timestamp"].to_numpy(), np.column_stack([t[n].to_numpy() for n in names])
-
-
-def sample_nearest(stream, timestamp, tolerance):
-    times, values = stream
-    i = np.searchsorted(times, timestamp)
-    candidates = [j for j in (i - 1, i) if 0 <= j < len(times)]
-    j = min(candidates, key=lambda j: abs(times[j] - timestamp))
-    delta = float(times[j] - timestamp)
-    return (values[j] if abs(delta) <= tolerance else np.full(values.shape[1], np.nan)), delta
+    elif path.name.endswith("_pose.parquet"):
+        names = ["x", "y", "z", "roll", "pitch", "yaw"]
+    stream, report = normalize_tracking(
+        (t["timestamp"].to_numpy(), np.column_stack([t[n].to_numpy() for n in names]))
+    )
+    TRACKING_REPORTS[str(path)] = report
+    print(f"Tracking {path.name}: {json.dumps(report)}", flush=True)
+    return stream
 
 
 def nearest(stream, timestamp, tolerance):
@@ -185,10 +187,22 @@ def main():
         action="store_true",
         help="Read original hand rows, no offsets or hand interpolation",
     )
+    ap.add_argument(
+        "--hand-calibration", type=Path, help="Validated tracker-local rigid hand calibration"
+    )
+    ap.add_argument(
+        "--rgb-only", action="store_true", help="Open RGB and original MANUS without depth"
+    )
+    ap.add_argument(
+        "--hand-status", type=Path, help="Side verification status displayed in the recording"
+    )
+    ap.add_argument(
+        "--manus-nodes",
+        action="store_true",
+        help="Show both original 25-node MANUS groups alongside RGB",
+    )
     ap.add_argument("--hand-points-dir", type=Path, help="Verified repaired Parquet directory")
     args = ap.parse_args()
-    if args.hand_points_dir and not args.raw_hands:
-        ap.error("--hand-points-dir requires --raw-hands")
     if args.raw_hands and (args.wrist_calibration or args.hand_cloud_fade_radius):
         ap.error("--raw-hands cannot use wrist correction or cloud thinning")
     if args.frames:
@@ -219,6 +233,21 @@ def main():
     video = args.dataset / "videos/chunk-000"
     key = "observation.images.depth_headband_left_rectified"
     ann = args.dataset / "annotation/chunk-000" / key / "episode_000000"
+    from manus_view import depth_available, export as export_manus
+
+    if args.rgb_only or not depth_available(args.dataset):
+        print("RGB/MANUS fallback: depth unavailable or RGB-only requested", flush=True)
+        fallback_status = json.loads(args.hand_status.read_text()) if args.hand_status else None
+        export_manus(
+            args.dataset,
+            args.output,
+            selected=args.frames,
+            start=args.start,
+            end=args.end,
+            labels=args.show_labels,
+            status=fallback_status,
+        )
+        return
     meta = json.loads((ann / "episode_000000_meta.json").read_text())
     k = meta["intrinsics"]["left"]
     with av.open(str(video / key / "episode_000000.mp4")) as container:
@@ -237,6 +266,18 @@ def main():
             "eye_gaze",
         )
     }
+    manus = None
+    if args.manus_nodes:
+        raw = pq.read_table(data / "observation.hand_skeleton.parquet")
+        manus, diagnostics = normalize_tracking(
+            (
+                raw["timestamp"].to_numpy(),
+                np.column_stack(
+                    [raw[f"node{i:02d}_{a}"].to_numpy() for i in range(50) for a in "xyz"]
+                ),
+            )
+        )
+        TRACKING_REPORTS["manus"] = diagnostics
     if args.hand_points_dir:
         from vive_correct.batch.report_io import digest
 
@@ -269,6 +310,29 @@ def main():
             not args.pose_radians
         ):
             ap.error("Wrist calibration uses a different pose angle convention")
+    hand_calibration = {}
+    if args.hand_calibration:
+        from vive_correct.batch.report_io import digest
+
+        hand_calibration = json.loads(args.hand_calibration.read_text())
+        if args.raw_hands or not args.hand_points_dir or not args.wrist_calibration:
+            ap.error(
+                "Hand calibration requires verified hand points and wrist calibration, without raw-hands"
+            )
+        if not hand_calibration.get("accepted") or not hand_calibration.get("hands"):
+            ap.error("Hand calibration did not pass independent validation")
+        if (
+            Path(hand_calibration["episode"]).resolve() != args.dataset.resolve()
+            or hand_calibration["camera_calibration"] != calibration
+            or hand_calibration["wrist_calibration_sha256"] != digest(args.wrist_calibration)
+        ):
+            ap.error("Hand calibration belongs to different data or camera/wrist calibration")
+        if args.hand_cloud_fade_radius:
+            ap.error("Calibrated hand validation requires the complete depth cloud")
+        for side, entry in hand_calibration["hands"].items():
+            if side not in ("left", "right") or not entry.get("accepted"):
+                ap.error("Invalid calibrated hand side")
+            rigid_matrix(entry["matrix"])
     registered = "T_head_rectified_camera" in calibration
     if args.hand_cloud_fade_radius and not registered:
         ap.error("Local hand/cloud thinning requires registered camera calibration")
@@ -340,12 +404,33 @@ def main():
             + json.dumps(wrist_calibration.get("wrists", {}))
         )
         status += "\n" + wrist_calibration.get("status", "")
+        depth_status = [
+            s.get("depth_refinement", {}).get("status", "pnp_preview")
+            for s in wrist_calibration.get("samples", [])
+        ]
+        status += "\nLabel depth checks: " + json.dumps(depth_status)
+        if "unverified_pnp_preview" in depth_status:
+            status += "\nSome label targets failed depth validation; those hands remain unverified previews."
     if args.interpolate_tracking and not args.raw_hands:
         status += "\nTracking synchronization: linear positions + rotation SLERP, brackets <=50ms, no extrapolation."
         status = status.replace("poses/hands 5ms, ", "")
     if args.hide_axes:
         status += "\nWorld/camera reference axes hidden."
     status += f"\nHead and wrist markers: {args.pose_markers}; local axis length {args.pose_axis_length}m. Moving camera frustum depth {args.frustum_depth}m; wireframe only."
+    if hand_calibration:
+        status = status.replace(
+            "Hand skeleton: translation preview only; orientation and wrist mounting are NOT corrected.",
+            "Hand skeleton: validated rigid mount correction on configured sides; other sides remain previews.",
+        )
+        status += "\nValidated tracker-local rigid hand correction applied to: " + ", ".join(
+            hand_calibration["hands"]
+        )
+    hand_status = (
+        json.loads(args.hand_status.read_text())
+        if args.hand_status
+        else {"status": "source_sides_unverified"}
+    )
+    status += "\nHand side verification: " + json.dumps(hand_status, ensure_ascii=False)
     args.output.parent.mkdir(parents=True, exist_ok=True)
     rr.init(args.application_id or "ego_depth_360_540")
     rr.save(str(args.output))
@@ -421,6 +506,13 @@ def main():
             name="Depth point cloud",
         )
     ]
+    if args.manus_nodes:
+        for block in (0, 25):
+            views.append(
+                rrb.Spatial3DView(
+                    origin=f"manus/block_{block}", name=f"MANUS nodes {block}-{block + 24} (local)"
+                )
+            )
     if not registered:
         views.append(rrb.Spatial3DView(origin="world", name="OpenVR tracking (unregistered)"))
     rr.send_blueprint(
@@ -473,8 +565,14 @@ def main():
         if selected_frames is not None and idx not in selected_frames:
             continue
         ts = float(times[idx])
+        if not np.isfinite(ts):
+            skipped_frames.append(idx)
+            continue
         rr.set_time_sequence("frame", idx)
         rr.set_time_seconds("time", ts)
+        if manus is not None:
+            nodes = nearest(manus, ts, 0.005).reshape(50, 3)
+            log_nodes(nodes, labels=args.show_labels)
         head = nearest(streams["head_pose"], ts, 0.005)
         if registered:
             if not np.isfinite(head).all():
@@ -556,6 +654,17 @@ def main():
             if "head" not in name and not args.raw_hands:
                 side = "left" if "left" in name else "right"
                 wrist_pose = nearest(streams[side + "_wrist_pose"], ts, 0.005)
+                if "points" in name and side in hand_calibration.get("hands", {}):
+                    if np.isfinite(wrist_pose).all():
+                        pts = apply_mount(
+                            pts,
+                            pose_matrix(
+                                wrist_pose, args.pose_euler_sequence, not args.pose_radians
+                            ),
+                            hand_calibration["hands"][side]["matrix"],
+                        )
+                    else:
+                        pts[:] = np.nan
                 pts = pts + correction_world(
                     wrist_calibration,
                     side,
@@ -774,6 +883,10 @@ def main():
         status=status,
     )
     report.update(
+        hand_calibration=str(args.hand_calibration) if args.hand_calibration else None,
+        hand_side_verification=hand_status,
+        timestamp_diagnostics=TRACKING_REPORTS,
+        manus_nodes=args.manus_nodes,
         skipped_missing_head_frames=skipped_frames,
         tracking_interpolated=args.interpolate_tracking,
         image_resolution=[width, height],

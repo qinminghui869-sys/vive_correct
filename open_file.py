@@ -130,6 +130,9 @@ def command_for(
             *extra,
         ]
 
+    if kind == "manus":
+        return [sys.executable, str(ROOT / "open_manus.py"), str(episode), *extra]
+
     if kind != "wrists":
         raise SystemExit(f"未知打开方式：{kind}")
 
@@ -155,7 +158,7 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument("path", type=Path, help="episode 目录、.rrd、图片或视频")
     parser.add_argument(
-        "--tool", choices=("auto", "wrists", "stickers", "rerun", "view"), default="auto"
+        "--tool", choices=("auto", "wrists", "manus", "stickers", "rerun", "view"), default="auto"
     )
     parser.add_argument(
         "--initial-frame", type=int, help="腕部工具的起始预览帧；其他 episode 默认选可同步帧"

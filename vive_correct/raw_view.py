@@ -18,6 +18,14 @@ def main(argv=None):
     parser.add_argument("--out", type=Path, required=True)
     parser.add_argument("--initial-mount", type=Path, default=DEFAULT_MOUNT)
     parser.add_argument("--frames", type=int, nargs="+", help="Export selected zero-based frames")
+    parser.add_argument(
+        "--rgb-only", action="store_true", help="Show RGB and original MANUS even when depth exists"
+    )
+    parser.add_argument(
+        "--manus",
+        action="store_true",
+        help="Include original 50 MANUS nodes in local-coordinate views",
+    )
     parser.add_argument("--open-rerun", action="store_true")
     parser.add_argument(
         "--show-labels", action="store_true", help="Show joint numbers; may overlap in dense views"
@@ -32,19 +40,25 @@ def main(argv=None):
     if output == episode or episode in output.parents or output in episode.parents:
         parser.error("Output must be separate from the dataset")
     check_dependencies(args.open_rerun)
-    count = pq.read_metadata(
-        episode / "data/chunk-000/episode_000000" / f"{DEPTH_KEY}.parquet"
-    ).num_rows
+    timestamp_path = episode / "data/chunk-000/episode_000000" / f"{DEPTH_KEY}.parquet"
+    from ego_data.manus_view import depth_available, rgb_source
+
+    if args.rgb_only or not depth_available(episode):
+        timestamp_path, _ = rgb_source(episode)
+    count = pq.read_metadata(timestamp_path).num_rows
     if count < 1 or (args.frames and any(i < 0 or i >= count for i in args.frames)):
         parser.error("Requested frames must lie within the depth stream")
     mount = json.loads(args.initial_mount.read_text())
     output.mkdir(parents=True, exist_ok=True)
-    mode = "repaired" if args.repair_hands else "raw"
     hands = None
     if args.repair_hands:
-        from vive_correct.hand_repair import repair
+        from vive_correct.hand_repair import prepare_hands
 
-        hands = repair(episode, output / "hands")
+        hands, hand_status = prepare_hands(episode, output / "hands")
+        (output / "hand_status.json").write_text(json.dumps(hand_status, indent=2) + "\n")
+        if hands is None:
+            print(f"Unverified source preview: {hand_status['reason']}", flush=True)
+    mode = "repaired" if hands else "unverified" if args.repair_hands else "raw"
     pending = output / f"{mode}.partial.rrd"
     command = [
         sys.executable,
@@ -68,6 +82,12 @@ def main(argv=None):
         "--output",
         str(pending),
     ]
+    if args.rgb_only:
+        command.append("--rgb-only")
+    if args.repair_hands:
+        command += ["--hand-status", str(output / "hand_status.json")]
+    if args.manus:
+        command.append("--manus-nodes")
     if hands:
         command += ["--hand-points-dir", str(hands)]
     if not mount["head_euler_degrees"]:
