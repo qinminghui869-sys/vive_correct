@@ -1,3 +1,9 @@
+# Feature scan: early interval / late coarse scan / late recovery / full-frame recovery.
+feature_initial_seconds: 10.0
+feature_initial_stride: 5
+feature_recovery_stride: 5
+# CV-only bilateral identity initialization; --window can override.
+tracking_window: 5
 # Native image pixels; candidate generation is permissive, acceptance is conservative.
 proposal_max_width: 960
 thresholds: [55, 75, 95, 120, 145, 175, 205, 225]

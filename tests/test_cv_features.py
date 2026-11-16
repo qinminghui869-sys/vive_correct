@@ -2,6 +2,7 @@ import json
 from pathlib import Path
 from tempfile import TemporaryDirectory
 import unittest
+from unittest.mock import patch
 
 import cv2
 import numpy as np
@@ -151,6 +152,7 @@ class FeatureTests(unittest.TestCase):
             writer.release()
             result = scan_features(root / "episode", root / "out", CVConfig.load(), stride=3)
             self.assertEqual(result["mode"], "same_frame")
+            self.assertEqual([p["name"] for p in result["scan_phases"]], ["initial"])
             self.assertEqual(set(result["features"]), {"left", "right"})
             self.assertFalse(result["human_verified"])
             self.assertEqual(len({c["frame_image"] for c in result["features"].values()}), 1)
@@ -221,3 +223,73 @@ class FeatureTests(unittest.TestCase):
             with self.assertLogs("vive_correct.cv_features", level="ERROR"):
                 with self.assertRaisesRegex(ValueError, "rectified"):
                     refilter_features(root, root / "out", CVConfig.load())
+
+
+class SamplingTests(unittest.TestCase):
+    def test_time_boundary_and_fractional_frame_rate(self):
+        from vive_correct.cv_features import feature_scan_phases
+
+        phases = feature_scan_phases(700, 29.97, 15, CVConfig.load())
+        self.assertEqual(
+            phases[0]["ranges"],
+            [
+                dict(start=0, stop=300, stride=5),
+                dict(start=300, stop=700, stride=15),
+            ],
+        )
+        self.assertEqual(phases[1]["ranges"], [dict(start=300, stop=700, stride=5)])
+        self.assertEqual(phases[2]["ranges"], [dict(start=0, stop=700, stride=1)])
+        for fps in (0, -1, float("nan")):
+            with self.assertRaisesRegex(ValueError, "invalid_video_fps"):
+                feature_scan_phases(700, fps, 15, CVConfig.load())
+
+    def test_missing_side_recovers_without_rechecking_frames(self):
+        class Capture:
+            def __init__(self):
+                self.index = -1
+
+            def isOpened(self):
+                return True
+
+            def get(self, prop):
+                return 40 if prop == cv2.CAP_PROP_FRAME_COUNT else 2.0
+
+            def set(self, prop, value):
+                self.index = -1
+                return True
+
+            def grab(self):
+                self.index += 1
+                return self.index < 40
+
+            def retrieve(self):
+                return True, np.full((4, 4, 3), self.index, np.uint8)
+
+            def release(self):
+                pass
+
+        called = []
+
+        def detector(image, *args, **kwargs):
+            called.append(int(image[0, 0, 0]))
+            return {"candidates": {"left": []}}
+
+        def finish(report, *args):
+            return report
+
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            video = root / VIDEO_SUFFIX
+            video.parent.mkdir(parents=True)
+            video.touch()
+            with (
+                patch("vive_correct.cv_features.cv2.VideoCapture", return_value=Capture()),
+                patch("vive_correct.cv_features.detect_label_candidates", side_effect=detector),
+                patch("vive_correct.cv_features._finish_features", side_effect=finish),
+            ):
+                result = scan_features(root, root / "out", CVConfig.load())
+        self.assertEqual(called[:6], [0, 5, 10, 15, 20, 35])
+        self.assertEqual(called[6:8], [25, 30])
+        self.assertEqual(len(called), 40)
+        self.assertEqual(set(called), set(range(40)))
+        self.assertEqual([p["examined_frames"] for p in result["scan_phases"]], [6, 2, 32])

@@ -11,6 +11,10 @@ import yaml
 
 @dataclass(frozen=True)
 class CVConfig:
+    feature_initial_seconds: float = 10.0
+    feature_initial_stride: int = 5
+    feature_recovery_stride: int = 5
+    tracking_window: int = 5
     proposal_max_width: int = 960
     thresholds: tuple = (55, 75, 95, 120, 145, 175, 205, 225)
     approx_epsilons: tuple = (0.015, 0.025, 0.035)
@@ -55,6 +59,11 @@ class CVConfig:
     association_margin: float = 0.10
 
     def __post_init__(self):
+        for name in ("feature_initial_stride", "feature_recovery_stride", "tracking_window"):
+            if type(getattr(self, name)) is not int or getattr(self, name) < 1:
+                raise ValueError(f"{name} must be a positive integer")
+        if self.tracking_window < 3 or self.tracking_window % 2 == 0:
+            raise ValueError("tracking_window must be odd and >= 3")
         for name in ("thresholds", "approx_epsilons"):
             values = getattr(self, name)
             if not isinstance(values, (tuple, list)) or not values:

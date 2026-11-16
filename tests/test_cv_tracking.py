@@ -103,6 +103,17 @@ class DetectorTests(unittest.TestCase):
 
 
 class TrackingTests(unittest.TestCase):
+    def test_default_initialization_requires_five_consecutive_frames(self):
+        tracker = SideTracker()
+        self.assertEqual(tracker.window, 5)
+        image, quads = scene()
+        gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+        for index in range(4):
+            tracker.update(index, gray, [{"quad": q} for q in quads])
+            self.assertFalse(tracker.initialized)
+        tracker.update(4, gray, [{"quad": q} for q in quads])
+        self.assertTrue(tracker.initialized)
+
     def test_init_requires_window_and_both_sides(self):
         image, quads = scene()
         selection = SelectionConfig(window=3)
@@ -111,6 +122,51 @@ class TrackingTests(unittest.TestCase):
         found = select_tracked_frames(enumerate([image] * 4), selection=selection)
         self.assertEqual(set(found["best"]), {"left", "right"})
         self.assertFalse(found["identity_verified"])
+
+    def test_current_frame_is_selected_without_stability_window(self):
+        image, quads = scene()
+        candidates = [dict(quad=q, score=1.0, compact_body=True, box_supported=True) for q in quads]
+        detections = [dict(candidates={"left": candidates}, rejected={}) for _ in range(5)]
+        # Immediately after initialization, only the left hand is re-detected.
+        detections.append(dict(candidates={"left": [dict(candidates[0], score=2.0)]}, rejected={}))
+        with (
+            patch(
+                "vive_correct.estimate.cv_tracking.detect_label_candidates", side_effect=detections
+            ),
+            patch(
+                "vive_correct.estimate.find_stable_frame.measure_stability",
+                side_effect=AssertionError("stability gate must not run"),
+            ),
+            patch("vive_correct.estimate.find_stable_frame.fit_candidate", return_value={}) as fit,
+        ):
+            result = select_tracked_frames(
+                enumerate([image] * 6), selection=SelectionConfig(window=5), camera=object()
+            )
+        self.assertEqual(result["best"]["left"]["frame_index"], 5)
+        self.assertEqual(result["best"]["left"]["window"], [5, 5])
+        self.assertEqual(result["best"]["right"]["frame_index"], 4)
+        self.assertFalse(result["stability_gate_enabled"])
+        self.assertEqual(fit.call_count, 3)
+        self.assertNotIn("passed", result["best"]["left"]["pose"]["stability"])
+
+    def test_geometry_gate_still_rejects_invalid_pose(self):
+        image, quads = scene()
+        candidates = [dict(quad=q, score=1.0, compact_body=True, box_supported=True) for q in quads]
+        with (
+            patch(
+                "vive_correct.estimate.cv_tracking.detect_label_candidates",
+                return_value=dict(candidates={"left": candidates}, rejected={}),
+            ),
+            patch(
+                "vive_correct.estimate.find_stable_frame.fit_candidate",
+                side_effect=ValueError("bad geometry"),
+            ),
+        ):
+            result = select_tracked_frames(
+                enumerate([image] * 5), selection=SelectionConfig(window=5), camera=object()
+            )
+        self.assertEqual(result["best"], {})
+        self.assertEqual(result["rejected"]["geometry_gate"], 2)
 
     def test_crossing_keeps_identity_with_real_lk(self):
         tracker = SideTracker(window=3)
@@ -219,13 +275,27 @@ class OfflinePipelineTests(unittest.TestCase):
                     patch("subprocess.run", side_effect=AssertionError("external model process")),
                 ):
                     self.assertEqual(main(args), 0)
+                    plan = json.loads((root / folder / "run_plan.json").read_text())
+                    self.assertEqual(plan["selection"]["window"], 5)
                     summary = json.loads(
                         (root / folder / "batch/delivery/summary.json").read_text()
                     )
                     self.assertIsNone(summary["model"])
                     self.assertEqual(set(summary["episodes"][0]["hands"]), {"left", "right"})
                     self.assertFalse(summary["human_verified"])
+                    delivery = root / folder / "batch/delivery"
+                    self.assertTrue((delivery / "tracked.html").is_file())
+                    self.assertIn('href="tracked.html"', (delivery / "index.html").read_text())
+                    features = json.loads((delivery / "features_summary.json").read_text())
+                    self.assertEqual(features["counts"]["episodes"], 1)
+                    report = features["episodes"][0]
+                    self.assertEqual(report["video_space"], "rectified")
+                    self.assertTrue(Path(report["human_review_file"]).is_file())
+                    self.assertTrue(
+                        all("label_center_px" in c for c in report["features"].values())
+                    )
                     self.assertEqual(main(args), 0)
+                    self.assertIn('href="tracked.html"', (delivery / "index.html").read_text())
 
 
 if __name__ == "__main__":

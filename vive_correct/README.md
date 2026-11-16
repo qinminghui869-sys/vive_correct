@@ -8,6 +8,20 @@
 
 安装检查使用头部和双腕姿态。骨架叠图使用左右手 21 点 parquet，缺失时仍可生成标签图片。Rerun 导出还需要深度、有效深度掩码、深度内参、眼动视频和 gaze 数据。
 
+## 纯 CV 全流程
+
+```bash
+bash scripts/run_cv.sh samples outputs/cv_full --jobs 4
+```
+
+等效入口是 `python3 -m vive_correct run --profile cv --stage all --model-review off --dataset samples --out outputs/cv_full --jobs 4`。脚本另将 stdout/stderr 保存为 `run.log` 并保留退出码。
+
+只接受校正左目视频，缺失或解码失败报错。顺序运行连续跟踪/几何观测与特征选帧，产物包括帧序号、四角、标签中心、原帧、特征图和人工审核模板。`batch/delivery/index.html` 为特征图入口，`tracked.html` 为独立跟踪报告。模型密钥和 Codex 登录均不需要；不会自动进行物理身份验证、轨迹修复或 Rerun 导出。
+
+特征首轮扫描前10秒每5帧、后段每15帧；仍缺任意一侧时，后段每5帧补扫，再按需全段逐帧补扫。纯 CV 身份初始化需要连续5帧可靠双侧关联；之后直接按当前帧几何选取观测，不再检查稳定窗口。跟踪过程不跳帧。
+
+完整输入结构、40条清单命令、错误处理和审核步骤见[纯 CV 指南](../docs/cv_detection.md)。后面的模型识别流程与模型交付目录只适用于 Astra/legacy 路径。
+
 ## 模型与参数
 
 默认 `--profile astra` 使用 Codex 登录账户调用 `gpt-6-astra`，不读取 API 密钥。预设在 [config/run.yaml](config/run.yaml)，显式命令参数优先：
@@ -51,7 +65,7 @@ API 模式使用 `--profile legacy`。复制 `openai.example.json` 为 `openai.l
 
 ## 阶段与产物
 
-默认 `--stage all` 执行估计、扫描、复核、安装检查和交付。`estimate`、`scan` 用于分阶段诊断；`finish` 接受已有人工复核文件，具体参数见帮助。
+模型路径默认 `--stage all` 执行估计、扫描、复核、安装检查和交付；纯 CV 的 `all` 范围见上文。`estimate`、`scan` 用于分阶段诊断；`finish` 接受已有人工复核文件，具体参数见帮助。
 
 ```text
 <out>/

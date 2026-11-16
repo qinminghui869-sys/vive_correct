@@ -36,9 +36,11 @@ def build_alignment(
         for s in ("head", "left_wrist", "right_wrist")
     }
     video_times = pq.read_table(data / f"{report['video_key']}.parquet")["timestamp"].to_numpy()
-    depth_times = pq.read_table(data / "observation.images.depth_headband_left_rectified.parquet")[
-        "timestamp"
-    ].to_numpy()
+    depth_path = data / "observation.images.depth_headband_left_rectified.parquet"
+    depth_times = (
+        pq.read_table(depth_path)["timestamp"].to_numpy() if depth_path.is_file() else video_times
+    )
+    alignment_timeline = "depth" if depth_path.is_file() else "rectified_rgb"
     sequence = calibration["head_euler_sequence"]
     degrees = calibration["head_euler_degrees"]
     mount = np.asarray(calibration["T_head_rectified_camera"])
@@ -117,6 +119,7 @@ def build_alignment(
         raise ValueError("No repaired wrist origins")
     return dict(
         depth_refinement_enabled=refine_depth,
+        alignment_timeline=alignment_timeline,
         version=2,
         episode=str(episode.resolve()),
         camera_calibration=calibration,

@@ -79,12 +79,16 @@ def render_cv_delivery(output, entries, detector_report):
         delivery / "summary.json",
         dict(model=None, human_verified=False, detector_config=detector_report, episodes=summaries),
     )
-    (delivery / "index.html").write_text(
+    page = (
         '<!doctype html><meta charset="utf-8"><title>CV label observations</title>'
         "<h1>Pure CV label observations</h1><p>Side identity assumes the first reliable "
         "bilateral window is uncrossed. No human verification. Origin: label centre.</p>"
-        + "\n".join(cards),
-        encoding="utf-8",
+        + '<p><a href="index.html">特征图 / 交付首页</a></p>'
+        + "\n".join(cards)
     )
+    (delivery / "tracked.html").write_text(page, encoding="utf-8")
+    # Keep the feature gallery on resume; the tracked report has its own stable URL.
+    if not (delivery / "features_summary.json").exists():
+        (delivery / "index.html").write_text(page, encoding="utf-8")
     print(f"Delivery: {delivery / 'index.html'}", flush=True)
     return 0

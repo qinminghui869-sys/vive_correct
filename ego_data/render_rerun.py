@@ -235,6 +235,19 @@ def main():
     ann = args.dataset / "annotation/chunk-000" / key / "episode_000000"
     from manus_view import depth_available, export as export_manus
 
+    if (args.rgb_only or not depth_available(args.dataset)) and args.wrist_calibration:
+        from corrected_rgb import export_corrected_rgb
+
+        export_corrected_rgb(
+            args.dataset,
+            args.output,
+            args.wrist_calibration,
+            start=args.start,
+            end=args.end,
+            selected=args.frames,
+            hand_points_dir=args.hand_points_dir,
+        )
+        return
     if args.rgb_only or not depth_available(args.dataset):
         print("RGB/MANUS fallback: depth unavailable or RGB-only requested", flush=True)
         fallback_status = json.loads(args.hand_status.read_text()) if args.hand_status else None

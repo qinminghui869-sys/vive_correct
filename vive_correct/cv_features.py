@@ -154,6 +154,31 @@ def feature_video_signature(episode):
     )
 
 
+def feature_scan_phases(limit, fps, stride, config):
+    """Half-open frame ranges; sampling is anchored at each range start."""
+    if not np.isfinite(fps) or fps <= 0:
+        raise ValueError("invalid_video_fps")
+    if type(stride) is not int or stride < 1:
+        raise ValueError("Feature scan stride must be positive")
+    split = min(limit, int(np.ceil(config.feature_initial_seconds * fps)))
+    return [
+        dict(
+            name="initial",
+            ranges=[
+                dict(start=0, stop=split, stride=config.feature_initial_stride),
+                dict(start=split, stop=limit, stride=stride),
+            ],
+        ),
+        dict(
+            name="late_recovery",
+            ranges=[
+                dict(start=split, stop=limit, stride=config.feature_recovery_stride),
+            ],
+        ),
+        dict(name="full_recovery", ranges=[dict(start=0, stop=limit, stride=1)]),
+    ]
+
+
 def scan_features(episode, output, config, stride=15, max_frames=None):
     cv2.setNumThreads(1)
     start = time.perf_counter()
@@ -181,20 +206,37 @@ def scan_features(episode, output, config, stride=15, max_frames=None):
     loose = review_config(config)
     total = int(capture.get(cv2.CAP_PROP_FRAME_COUNT)) if capture and capture.isOpened() else 0
     limit = min(total, max_frames) if max_frames else total
+    fps = capture.get(cv2.CAP_PROP_FPS) if capture and capture.isOpened() else 0.0
+    report.update(
+        video_fps=float(fps) if np.isfinite(fps) else None,
+        sampling_time_basis="frame_index / video_fps",
+        scan_phases=[],
+    )
     if not limit:
         error = "missing_video" if not video.is_file() else "cannot_decode_video"
+    elif not np.isfinite(fps) or fps <= 0:
+        error = "invalid_video_fps"
     else:
-        scan_strides, seen = [stride], set()
-        report["scan_strides"] = scan_strides
-        for step in scan_strides:
-            if step != stride:
+        seen = set()
+        for phase in feature_scan_phases(limit, fps, stride, config):
+            if report["scan_phases"] and len(best) == 2:
+                break
+            if all(r["start"] >= r["stop"] for r in phase["ranges"]):
+                continue
+            phase["examined_frames"] = 0
+            report["scan_phases"].append(phase)
+            if phase["name"] != "initial":
                 capture.set(cv2.CAP_PROP_POS_FRAMES, 0)
             for index in range(limit):
                 if not capture.grab():
                     error = f"decode_failed_at_{index}"
                     break
                 report["decoded_frames"] += 1
-                if (index % step and index != limit - 1) or index in seen:
+                sampled = any(
+                    r["start"] <= index < r["stop"] and (index - r["start"]) % r["stride"] == 0
+                    for r in phase["ranges"]
+                )
+                if not sampled or index in seen:
                     continue
                 seen.add(index)
                 ok, image = capture.retrieve()
@@ -202,6 +244,7 @@ def scan_features(episode, output, config, stride=15, max_frames=None):
                     error = f"decode_failed_at_{index}"
                     break
                 report["examined_frames"] += 1
+                phase["examined_frames"] += 1
                 h, w = image.shape[:2]
                 found = detect_label_candidates(
                     image, {"left": [0, 0, w, h]}, config=loose, preserve_variants=True
@@ -248,8 +291,7 @@ def scan_features(episode, output, config, stride=15, max_frames=None):
                     pairs.append(current)
             if error:
                 break
-            if len(best) < 2 and step > 1:
-                scan_strides.append(max(1, step // 3))
+
     if capture:
         capture.release()
     selected, report["mode"] = choose_features(best, pairs, config.pair_quality_ratio)
@@ -405,6 +447,8 @@ def render_features(output, reports, config_report):
     delivery = output / "batch/delivery"
     delivery.mkdir(parents=True, exist_ok=True)
     cards = []
+    if (delivery / "tracked.html").is_file():
+        cards.append('<p><a href="tracked.html">连续跟踪与几何观测报告（独立于特征候选）</a></p>')
     for report in reports:
         name = Path(report["episode"]).parent.name + "/" + Path(report["episode"]).name
         cards.append(

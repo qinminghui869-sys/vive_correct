@@ -242,8 +242,8 @@ def main(argv=None):
     parser.add_argument(
         "--window",
         type=int,
-        default=defaults.window,
-        help="Stability window for estimates and automatic review (default: 11)",
+        default=None,
+        help="CV identity initialization frames (default: 5); model stability window (default: 11)",
     )
     parser.add_argument(
         "--max-frames",
@@ -319,6 +319,16 @@ def main(argv=None):
             if args.qwen_review == "on" and not args.fixed_candidates and not args.baseline_only
             else 0
         )
+    if args.window is None:
+        if args.qwen_review == "off" and (args.profile == "cv" or not args.fixed_candidates):
+            from vive_correct.estimate.cv_config import CVConfig
+
+            try:
+                args.window = CVConfig.load(args.cv_config).tracking_window
+            except (ValueError, OSError) as error:
+                parser.error(str(error))
+        else:
+            args.window = defaults.window
     dataset, output = args.dataset.resolve(), args.out.resolve()
     try:
         if args.dry_run and args.stage != "all":
@@ -409,7 +419,7 @@ def main(argv=None):
             from vive_correct.estimate.cv_config import CVConfig
 
             return run_feature_dataset(args, dataset, output, CVConfig.load(args.cv_config))
-        if args.stage == "all":
+        if args.stage == "all" and args.qwen_review != "off":
             if (
                 min(
                     args.review_limit,
@@ -427,7 +437,10 @@ def main(argv=None):
                 raise ValueError("--first-pass must not exceed --review-limit")
             if not 0 <= args.review_confidence <= 1:
                 raise ValueError("--review-confidence must be between 0 and 1")
-            if args.qwen_review == "off" and (args.axis_baseline or args.baseline_only):
+        if args.stage == "all" and args.qwen_review == "off":
+            if args.coarse_stride < 1:
+                raise ValueError("--coarse-stride must be positive")
+            if args.axis_baseline or args.baseline_only:
                 raise ValueError("--model-review off cannot inherit reviewed baselines")
         if args.cv_config is not None and (
             args.qwen_review != "off" or (args.fixed_candidates and args.profile != "cv")

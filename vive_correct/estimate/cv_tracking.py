@@ -1,6 +1,6 @@
 """Sequential identity association and conservative per-hand best observations."""
 
-from collections import Counter, deque
+from collections import Counter
 
 import cv2
 import numpy as np
@@ -21,9 +21,10 @@ def align_quad(reference, candidate):
 
 
 class SideTracker:
-    def __init__(self, window=11, max_fb_px=1.5, config=None):
-        self.window, self.max_fb_px = window, max_fb_px
+    def __init__(self, window=None, max_fb_px=1.5, config=None):
         self.config = config or CVConfig.load()
+        self.window = self.config.tracking_window if window is None else window
+        self.max_fb_px = max_fb_px
         self.previous = None
         self.tracks = {}
         self.pending = 0
@@ -130,11 +131,10 @@ class SideTracker:
 
 
 def select_tracked_frames(frames, *, selection, camera=None, detector_config=None):
-    from vive_correct.estimate.find_stable_frame import fit_candidate, measure_stability
+    from vive_correct.estimate.find_stable_frame import fit_candidate
 
     config = detector_config or CVConfig.load()
     tracker = SideTracker(selection.window, selection.max_fb_px, config)
-    history = deque(maxlen=selection.window)
     best, rejected, examined = {}, Counter(), 0
     trace = []
     pairs = []
@@ -169,25 +169,13 @@ def select_tracked_frames(frames, *, selection, camera=None, detector_config=Non
                     },
                 }
             )
-        history.append((index, image, gray, matched))
         examined += 1
-        if not tracker.initialized or len(history) != selection.window:
+        if not tracker.initialized:
             continue
-        if history[-1][0] - history[0][0] != selection.window - 1:
-            continue
-        middle = history[selection.window // 2]
-        frame_index, frame, _, labels = middle
+        frame_index, frame = index, image
         frame_pair = {}
-        for side, candidate in labels.items():
-            if any(side not in item[3] for item in history):
-                continue
+        for side, candidate in matched.items():
             try:
-                stability = measure_stability(
-                    [item[2] for item in history], candidate["quad"], (width, height), selection
-                )
-                if not stability["passed"]:
-                    rejected[stability["reason"]] += 1
-                    continue
                 pose = (
                     fit_candidate(
                         frame,
@@ -202,20 +190,20 @@ def select_tracked_frames(frames, *, selection, camera=None, detector_config=Non
             except (ValueError, cv2.error):
                 rejected["geometry_gate"] += 1
                 continue
-            temporal_penalty = (
-                0.1 * stability["fb_max_px"] / selection.max_fb_px
-                + 0.1 * stability["p95_motion_px_per_frame"] / selection.max_p95_motion_px
-            )
-            quality = candidate["score"] / (1 + temporal_penalty)
+            quality = candidate["score"]
             diagnostics = {k: v for k, v in candidate.items() if k != "quad"}
             diagnostics.update(
                 side_source=SIDE_SOURCE,
                 tracking_status="associated",
                 identity_verified=False,
                 selection_score=quality,
+                observation_gate="single_frame_geometry",
             )
             if pose is not None:
-                pose.update(stability=stability, cv_diagnostics=diagnostics)
+                pose.update(
+                    stability={"status": "not_evaluated", "reason": "CV stability gate removed"},
+                    cv_diagnostics=diagnostics,
+                )
             frame_pair[side] = dict(
                 frame_index=frame_index,
                 image=frame,
@@ -223,7 +211,7 @@ def select_tracked_frames(frames, *, selection, camera=None, detector_config=Non
                 score=quality,
                 pose=pose,
                 diagnostics=diagnostics,
-                window=[history[0][0], history[-1][0]],
+                window=[frame_index, frame_index],
             )
             if side not in best or quality > best[side]["score"]:
                 best[side] = frame_pair[side]
@@ -249,6 +237,8 @@ def select_tracked_frames(frames, *, selection, camera=None, detector_config=Non
         "side_assignment": SIDE_SOURCE,
         "track_observations": trace,
         "identity_verified": False,
+        "observation_gate": "single_frame_geometry",
+        "stability_gate_enabled": False,
         "detector_config": config.report(),
     }
 
@@ -296,6 +286,6 @@ def select_episode(episode, selection, detector_config=None):
         else {0: "no_usable_label", 1: "single_hand", 2: "independent_best_frames"}[
             len(observations)
         ],
-        examined_windows=result["examined_frames"],
+        examined_windows=0,
     )
     return result

@@ -4,7 +4,7 @@
 
 ## 安装
 
-需要 Python 3.10+。默认识别模型为 `gpt-6-astra`，通过已安装并登录的 Codex CLI 调用。
+需要 Python 3.10+。纯 CV 模式不需要模型密钥或 Codex 登录。默认识别模型为 `gpt-6-astra`，通过已安装并登录的 Codex CLI 调用。
 
 ```bash
 python3 -m venv .venv
@@ -40,10 +40,14 @@ python3 -m vive_correct view outputs/demo
 ## 纯 OpenCV 模式
 
 ```bash
-python3 -m vive_correct run --profile cv --dataset samples --out outputs/cv_run --jobs 4
+bash scripts/run_cv.sh samples outputs/cv_full --jobs 4
 ```
 
-不调用模型，使用白色／黑色外壳检查、四角精修和连续光流关联，每手保留一个最佳观测。首次可靠双手窗口必须未交叉；身份不确定时输出缺失。如需优先导出每段的左右候选特征图，可加 `--stage features`；同帧双手优先，缺失输入明确标记。参数、诊断字段和人工验收方法见[纯 CV 指南](docs/cv_detection.md)。
+脚本强制纯 CV `--stage all`，顺序执行连续跟踪与几何求解、特征图选帧及审核材料生成；完整日志保存在 `outputs/cv_full/run.log`。只读取校正左目视频，不回退原始左目。
+
+打开 `outputs/cv_full/batch/delivery/index.html` 查看特征图，点击其中链接查看独立的 `tracked.html` 跟踪报告。每侧保留帧序号、四角、标签中心、无标注原帧、诊断图和人工审核模板。
+
+不调用模型，使用白色／黑色外壳检查、四角精修和连续光流关联，每手保留一个最佳观测。特征扫描首轮前10秒每5帧、后段每15帧；仍缺任意一侧时先补扫后段每5帧，再按需全段逐帧补扫。连续跟踪以5帧可靠双侧关联初始化身份；初始化后逐帧验收几何，不再要求稳定窗口。首次可靠双手窗口必须未交叉；身份不确定时输出缺失。如需优先导出每段的左右候选特征图，使用 Python 入口并指定 `--profile cv --stage features`；同帧双手优先，缺失输入明确标记。参数、诊断字段和人工验收方法见[纯 CV 指南](docs/cv_detection.md)。
 
 ## 查看手部数据
 

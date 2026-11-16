@@ -159,6 +159,8 @@ def run(
                     "identity_verified",
                     "detector_config",
                     "examined_frames",
+                    "observation_gate",
+                    "stability_gate_enabled",
                 )
             }
         )

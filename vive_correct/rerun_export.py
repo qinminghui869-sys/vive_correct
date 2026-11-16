@@ -60,11 +60,14 @@ def export_recordings(work, calibration, *, open_viewer=False):
             hand_status_path.write_text(
                 json.dumps(hand_status, ensure_ascii=False, indent=2) + "\n"
             )
-            times = pq.read_table(
-                episode / "data/chunk-000/episode_000000" / f"{DEPTH_KEY}.parquet"
-            )["timestamp"]
+            time_path = episode / "data/chunk-000/episode_000000" / f"{DEPTH_KEY}.parquet"
+            if not time_path.is_file():
+                from vive_correct.estimate.geometry import VIDEO_KEY
+
+                time_path = episode / "data/chunk-000/episode_000000" / f"{VIDEO_KEY}.parquet"
+            times = pq.read_table(time_path)["timestamp"]
             if not len(times):
-                raise ValueError("Depth stream is empty")
+                raise ValueError("Export timeline is empty")
             # Publish a recording only after the renderer finishes successfully.
             pending = folder / "recording.partial.rrd"
             log = folder / "render.log"

@@ -67,6 +67,17 @@ class OriginAlignmentTests(unittest.TestCase):
         for sample in result["samples"]:
             np.testing.assert_allclose(sample["target_world_m"], [2.1, 1.2, 0.4])
 
+    def test_missing_depth_uses_rectified_rgb_timeline_without_fake_depth(self):
+        (
+            self.episode
+            / "data/chunk-000/episode_000000/observation.images.depth_headband_left_rectified.parquet"
+        ).unlink()
+        result = self.build()
+        self.assertEqual(result["alignment_timeline"], "rectified_rgb")
+        self.assertEqual(result["samples"][0]["frame"], 1)
+        self.assertFalse(result["depth_refinement_enabled"])
+        np.testing.assert_allclose(result["wrists"]["left"]["offset_m"], [-17.9, 1.2, 0.4])
+
     def test_other_episode_is_rejected(self):
         self.payload["episode"] = str(self.episode.parent / "other")
         self.report.write_text(json.dumps(self.payload))
