@@ -1,0 +1,252 @@
+[
+  {
+    "name": "framed_picture",
+    "image": "framed_picture.png",
+    "quad": [
+      [
+        368.0,
+        374.0
+      ],
+      [
+        324.0,
+        428.0
+      ],
+      [
+        320.0,
+        384.0
+      ],
+      [
+        330.0,
+        320.0
+      ]
+    ],
+    "source_episode": "/home/baai/qmh/dataset/L3/L3_gaze_test/desk/L3-002-2026-10-29-14-09-25",
+    "frame_index": 75,
+    "review": "visual agent inspection; not human ground truth"
+  },
+  {
+    "name": "book_reflection",
+    "image": "book_reflection.png",
+    "quad": [
+      [
+        344.0,
+        326.0
+      ],
+      [
+        450.0,
+        394.0
+      ],
+      [
+        428.0,
+        390.0
+      ],
+      [
+        320.0,
+        320.0
+      ]
+    ],
+    "source_episode": "/home/baai/qmh/dataset/L3/L3_gaze_test/desk/L3-003-2026-11-04-15-09-35",
+    "frame_index": 1065,
+    "review": "visual agent inspection; not human ground truth"
+  },
+  {
+    "name": "tablecloth_grid",
+    "image": "tablecloth_grid.png",
+    "quad": [
+      [
+        320.94639326301217,
+        322.38696754418106
+      ],
+      [
+        380.5911443184168,
+        320.39466668107434
+      ],
+      [
+        410.7250297746384,
+        361.551684395631
+      ],
+      [
+        347.8156531794957,
+        363.454233674292
+      ]
+    ],
+    "source_episode": "/home/baai/qmh/dataset/L3/L3_gaze_test/dining/L3-001-2026-10-26-17-41-30",
+    "frame_index": 150,
+    "review": "visual agent inspection; not human ground truth"
+  },
+  {
+    "name": "gray_surface",
+    "image": "gray_surface.png",
+    "quad": [
+      [
+        119.76057894348925,
+        320.07181349308735
+      ],
+      [
+        171.35972935671984,
+        322.7968323538581
+      ],
+      [
+        139.44737158604943,
+        343.3986247661136
+      ],
+      [
+        86.86585389911266,
+        341.9139895310766
+      ]
+    ],
+    "source_episode": "/home/baai/qmh/dataset/L3/L3_gaze_test/stove/L3-001-2026-11-03-15-31-25",
+    "frame_index": 465,
+    "review": "visual agent inspection; not human ground truth"
+  },
+  {
+    "name": "clipped_remote",
+    "image": "clipped_remote.png",
+    "quad": [
+      [
+        320.0,
+        320.0
+      ],
+      [
+        344.0,
+        322.0
+      ],
+      [
+        344.0,
+        340.0
+      ],
+      [
+        330.0,
+        332.0
+      ]
+    ],
+    "source_episode": "/home/baai/qmh/dataset/L3/L3_gaze_test/desk/L3-003-2026-11-02-14-59-42",
+    "frame_index": 600,
+    "review": "visual agent inspection; not human ground truth"
+  },
+  {
+    "name": "dark_side_panel",
+    "image": "dark_side_panel.png",
+    "quad": [
+      [
+        348.0,
+        320.0
+      ],
+      [
+        340.0,
+        358.0
+      ],
+      [
+        320.0,
+        366.0
+      ],
+      [
+        328.0,
+        320.0
+      ]
+    ],
+    "source_episode": "/home/baai/qmh/dataset/L3/L3_gaze_test/desk/L3-002-2026-10-26-17-40-44",
+    "frame_index": 1680,
+    "review": "visual agent inspection; not human ground truth"
+  },
+  {
+    "name": "dark_handle",
+    "image": "dark_handle.png",
+    "quad": [
+      [
+        320.34956493338495,
+        331.0958780717807
+      ],
+      [
+        356.7493493389002,
+        320.6251698021347
+      ],
+      [
+        370.7751904606889,
+        354.57482564688144
+      ],
+      [
+        335.5193611411878,
+        364.18597749583284
+      ]
+    ],
+    "source_episode": "/home/baai/qmh/dataset/L3/L3_gaze_test/desk/L3-003-2026-11-06-14-18-49",
+    "frame_index": 2040,
+    "review": "visual agent inspection; not human ground truth"
+  },
+  {
+    "name": "small_white_background",
+    "image": "small_white_background.png",
+    "quad": [
+      [
+        344.77369370318206,
+        326.4199117642854
+      ],
+      [
+        354.50857212616097,
+        338.36534824667706
+      ],
+      [
+        341.4842434189136,
+        348.9151732848028
+      ],
+      [
+        320.0023212098856,
+        320.2327458942209
+      ]
+    ],
+    "source_episode": "/home/baai/qmh/dataset/L3/L3_gaze_test/desk/L3-002-2026-10-30-16-23-04",
+    "frame_index": 1130,
+    "review": "visual agent inspection; not human ground truth"
+  },
+  {
+    "name": "phone_reflection",
+    "image": "phone_reflection.png",
+    "quad": [
+      [
+        330.95474092036943,
+        320.81711715420647
+      ],
+      [
+        457.1864440436002,
+        357.8496565379835
+      ],
+      [
+        404.3807569239368,
+        360.223844753767
+      ],
+      [
+        320.0355516936022,
+        348.21420832863373
+      ]
+    ],
+    "source_episode": "/home/baai/qmh/dataset/L3/L3_gaze_test/desk/L3-003-2026-11-04-14-15-05",
+    "frame_index": 2805,
+    "review": "visual agent inspection; not human ground truth"
+  },
+  {
+    "name": "white_panel_hole",
+    "image": "white_panel_hole.png",
+    "quad": [
+      [
+        328.0,
+        320.0
+      ],
+      [
+        370.0,
+        370.0
+      ],
+      [
+        360.0,
+        414.0
+      ],
+      [
+        320.0,
+        384.0
+      ]
+    ],
+    "source_episode": "/home/baai/qmh/dataset/L3/L3_gaze_test/stove/L3-001-2026-11-03-15-31-25",
+    "frame_index": 395,
+    "review": "visual agent inspection; not human ground truth"
+  }
+]

@@ -1,0 +1,55 @@
+# Native image pixels; candidate generation is permissive, acceptance is conservative.
+proposal_max_width: 960
+thresholds: [55, 75, 95, 120, 145, 175, 205, 225]
+approx_epsilons: [0.015, 0.025, 0.035]
+max_saturation: 0.26
+max_chroma: 22.0
+min_white_fraction: 0.75
+min_contrast: 28.0
+dark_threshold: 115
+min_dark_fraction: 0.55
+min_side_dark: 0.25
+min_edge_support: 0.55
+min_fill: 0.85
+min_area: 180.0
+max_area_fraction: 0.10
+border_scale: 0.06
+refine_radius_scale: 0.10
+max_refine_shift: 6.0
+max_line_residual: 1.5
+nms_iou: 0.70
+association_fraction: 0.35
+association_margin: 0.10
+
+# Pixel is black only when gray < dark_threshold AND max(B,G,R) < this value.
+black_channel_max: 150
+surround_dark_threshold: 105
+# Scaled quads define shell annulus and surrounding context; label itself is excluded.
+shell_scale: 1.8
+context_scale: 2.8
+min_shell_fraction: 0.35
+min_enclosed_fraction: 0.70
+# Prefer a bilateral frame when both scores reach this fraction of independent best.
+pair_quality_ratio: 0.70
+
+# Reject repeated white keys on large black keyboards; preserve compact Tracker bodies.
+body_max_area_ratio: 30.0
+body_max_white_neighbors: 4
+body_min_fill: 0.28
+body_search_scale: 5.0
+# Spatial hint applies only to untracked feature images, not tracked physical identities.
+feature_min_y_fraction: 0.40
+
+# Mandatory local neutral-black box evidence; LEDs cannot bypass these gates.
+box_dark_threshold: 105
+box_channel_max: 125
+box_color_spread: 35
+box_scale: 1.4
+box_min_black: 0.75
+box_min_side_black: 0.40
+box_min_enclosure: 0.95
+
+# Neutral gray/black surfaces are not white labels.
+max_label_black_fraction: 0.10
+
+feature_min_corner_angle: 25.0

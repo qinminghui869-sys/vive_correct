@@ -40,7 +40,7 @@ API 模式使用 `--profile legacy`。复制 `openai.example.json` 为 `openai.l
 
 - `--episodes-file FILE`：JSON 数组中的相对样本路径，保持顺序；拒绝重复或未知路径。
 - `--dry-run`：仅用于默认 `all` 阶段。预览参数、样本和输入签名，不联网、不写结果；不检查视频解码或服务可用性。API 配置中的模型在正式执行时解析。
-- `--model-review off`：关闭模型，左右手仅按图像半区假设，结果标记为未复核。兼容旧名称 `--qwen-review`。
+- `--profile cv` 或 `--model-review off`：纯 CV 连续跟踪，每手选择最佳观测；首次双手窗口假设未交叉，结果仍未人工核验。参数见[纯 CV 指南](../docs/cv_detection.md)。兼容旧名称 `--qwen-review`；显式固定候选池消融仍保留旧半区流程。
 - `--fixed-candidates`：关闭补扫和提前停止，用于固定候选池比较。
 - `--tracker-guided-frames N`：局部搜索帧数，0 表示关闭。模型关闭、固定候选或基线回放模式不支持此项。
 - `--axis-baseline FILE`：加载与样本及报告哈希绑定的观测，保留已有结果并搜索缺失手。

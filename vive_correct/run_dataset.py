@@ -82,10 +82,13 @@ def _init_worker():
     cv2.setNumThreads(1)
 
 
-def _estimate_one(episode, folder, config):
+def _estimate_one(episode, folder, config, detector_config=None):
     """Run one episode's estimate; returns entry fields (module-level so it pickles)."""
     try:
-        report = estimate(episode, folder, config=config)
+        kwargs = (
+            {} if detector_config is None else dict(cv_only=True, detector_config=detector_config)
+        )
+        report = estimate(episode, folder, config=config, **kwargs)
         report_path = folder / "sticker_pose_report_new.json"
         hints = sorted({side for o in report["observations"] for side in o["stickers"]})
         return dict(
@@ -101,7 +104,7 @@ def _estimate_one(episode, folder, config):
         return dict(status="failed", error=str(error))
 
 
-def estimate_dataset(dataset, output, config, jobs=1, episodes_file=None):
+def estimate_dataset(dataset, output, config, jobs=1, episodes_file=None, detector_config=None):
     episodes = select_episodes(dataset, episodes_file)
     if not episodes:
         raise ValueError(f"No episodes found under {dataset}")
@@ -112,6 +115,8 @@ def estimate_dataset(dataset, output, config, jobs=1, episodes_file=None):
     }
     if episodes_file is not None:
         settings["selected_episodes"] = [p.relative_to(dataset).as_posix() for p in episodes]
+    if detector_config is not None:
+        settings["cv_detector"] = detector_config.report()
     state_path = output / "batch_state.json"
     previous = json.loads(state_path.read_text()) if state_path.exists() else {}
     if previous and previous.get("settings") != settings:
@@ -155,11 +160,11 @@ def estimate_dataset(dataset, output, config, jobs=1, episodes_file=None):
                 f"[{entry['index']}/{len(episodes)}] estimate {entry['relative_episode']}",
                 flush=True,
             )
-            record(entry, _estimate_one(episode, folder, config))
+            record(entry, _estimate_one(episode, folder, config, detector_config))
     else:
         with ProcessPoolExecutor(min(jobs, len(pending)), initializer=_init_worker) as pool:
             futures = {
-                pool.submit(_estimate_one, episode, folder, config): entry
+                pool.submit(_estimate_one, episode, folder, config, detector_config): entry
                 for entry, episode, folder in pending
             }
             try:
@@ -189,7 +194,7 @@ def estimate_dataset(dataset, output, config, jobs=1, episodes_file=None):
 
 def main(argv=None):
     profile_parser = argparse.ArgumentParser(add_help=False)
-    profile_parser.add_argument("--profile", choices=("astra", "legacy"), default="astra")
+    profile_parser.add_argument("--profile", choices=("astra", "legacy", "cv"), default="astra")
     profile_args, _ = profile_parser.parse_known_args(argv)
     parser = argparse.ArgumentParser(description=__doc__)
     try:
@@ -198,9 +203,9 @@ def main(argv=None):
         parser.error(str(error))
     parser.add_argument(
         "--profile",
-        choices=("astra", "legacy"),
+        choices=("astra", "legacy", "cv"),
         default="astra",
-        help="astra (default): Astra adaptive recovery; legacy: previous API defaults",
+        help="cv: offline sequential tracking; astra (default): model review; legacy: API defaults",
     )
     parser.add_argument(
         "--dry-run",
@@ -215,7 +220,9 @@ def main(argv=None):
         "--out", type=Path, required=True, help="Work directory; resume unchanged estimates"
     )
     parser.add_argument(
-        "--stage", choices=("all", "estimate", "scan", "finish", "gallery", "rerun"), default="all"
+        "--stage",
+        choices=("all", "estimate", "scan", "features", "finish", "gallery", "rerun"),
+        default="all",
     )
     parser.add_argument(
         "--rerun", action="store_true", help="Export full Rerun recordings after repair"
@@ -241,7 +248,7 @@ def main(argv=None):
     parser.add_argument(
         "--max-frames",
         type=int,
-        help="Limit initial estimates only; scan still covers the full video",
+        help="Limit CV sequential frames or model-mode initial estimates",
     )
     parser.add_argument("--scan-stride", type=int)
     parser.add_argument(
@@ -293,7 +300,7 @@ def main(argv=None):
         dest="qwen_review",
         choices=("on", "off"),
         default="on",
-        help="Disable model calls with off; image-half hand assignments remain unverified",
+        help="Disable model calls with off; initializes side identity under the uncrossed assumption",
     )
     parser.add_argument(
         "--fixed-candidates",
@@ -301,7 +308,11 @@ def main(argv=None):
         help="Use only the coarse pool and full candidate budget, without adaptive search/early stop",
     )
     parser.set_defaults(**{k: v for k, v in preset.items() if k != "tracker_guided_frames"})
+    parser.add_argument("--cv-config", type=Path, help="Partial overrides for config/cv.yaml")
     args = parser.parse_args(argv)
+    if args.profile == "cv":
+        args.qwen_review = "off"
+        args.tracker_guided_frames = 0
     if args.tracker_guided_frames is None:
         args.tracker_guided_frames = (
             preset["tracker_guided_frames"]
@@ -325,6 +336,20 @@ def main(argv=None):
         if args.stage == "rerun":
             return export_recordings(output, initial_mount, open_viewer=args.open_rerun)
         if args.stage == "gallery":
+            features = output / "batch/delivery/features_summary.json"
+            if features.exists():
+                from vive_correct.cv_features import render_features
+
+                saved = json.loads(features.read_text())
+                render_features(output, saved["episodes"], saved["detector_config"])
+                return 0
+            cv_summary = output / "batch/delivery/summary.json"
+            if cv_summary.exists() and "detector_config" in json.loads(cv_summary.read_text()):
+                from vive_correct.cv_dataset import render_cv_delivery
+
+                summary = json.loads(cv_summary.read_text())
+                entries = json.loads((output / "batch_state.json").read_text())["entries"]
+                return render_cv_delivery(output, entries, summary["detector_config"])
             from vive_correct.batch.bilateral_gallery import build
 
             build(output / "batch")
@@ -377,6 +402,13 @@ def main(argv=None):
         config = SelectionConfig(stride=args.stride, window=args.window, max_frames=args.max_frames)
         if args.jobs < 1:
             raise ValueError("--jobs must be positive")
+        if args.stage == "features":
+            if args.qwen_review != "off":
+                raise ValueError("--stage features requires --profile cv or --model-review off")
+            from vive_correct.cv_features import run_feature_dataset
+            from vive_correct.estimate.cv_config import CVConfig
+
+            return run_feature_dataset(args, dataset, output, CVConfig.load(args.cv_config))
         if args.stage == "all":
             if (
                 min(
@@ -397,6 +429,10 @@ def main(argv=None):
                 raise ValueError("--review-confidence must be between 0 and 1")
             if args.qwen_review == "off" and (args.axis_baseline or args.baseline_only):
                 raise ValueError("--model-review off cannot inherit reviewed baselines")
+        if args.cv_config is not None and (
+            args.qwen_review != "off" or (args.fixed_candidates and args.profile != "cv")
+        ):
+            raise ValueError("--cv-config requires the sequential CV profile")
         if args.dry_run:
             print(
                 json.dumps(
@@ -406,6 +442,23 @@ def main(argv=None):
                 )
             )
             return 0
+        if (
+            args.qwen_review == "off"
+            and args.stage in ("all", "estimate", "scan")
+            and (args.profile == "cv" or not args.fixed_candidates)
+        ):
+            if render:
+                raise ValueError(
+                    "Tracked CV outputs label observations; Rerun repair needs independently verified identities"
+                )
+            from vive_correct.cv_dataset import run_cv_dataset
+            from vive_correct.estimate.cv_config import CVConfig
+
+            return run_cv_dataset(
+                args, dataset, output, config, initial_mount, CVConfig.load(args.cv_config)
+            )
+        if args.cv_config is not None:
+            raise ValueError("--cv-config requires --profile cv or --model-review off")
         model_config = None
         transport = None
         if args.stage == "all":

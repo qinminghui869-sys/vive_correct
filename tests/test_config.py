@@ -16,7 +16,7 @@ from vive_correct.estimate.visualization import AXIS_LENGTH_M
 
 class ConfigTests(unittest.TestCase):
     def test_run_profiles_reject_malformed_or_inconsistent_parameters(self):
-        document = {name: run_settings(name) for name in ("astra", "legacy")}
+        document = {name: run_settings(name) for name in ("astra", "legacy", "cv")}
         for key, value in (
             ("review_confidence", float("nan")),
             ("model_jobs", True),

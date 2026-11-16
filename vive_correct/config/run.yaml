@@ -30,3 +30,19 @@ legacy:
   model_retries: 3
   review_confidence: 0.8
   tracker_guided_frames: 0
+
+# No model calls; sequential CV identity tracking.
+cv:
+  transport: api
+  codex_model: gpt-6-astra
+  jobs: 12
+  model_jobs: 3
+  coarse_stride: 15
+  scan_stride: 5
+  first_pass: 8
+  review_limit: 24
+  review_batch_size: 1
+  model_timeout: 180
+  model_retries: 3
+  review_confidence: 0.8
+  tracker_guided_frames: 0

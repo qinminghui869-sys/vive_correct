@@ -57,6 +57,8 @@ def run(
     api_key=None,
     base_url=None,
     model=None,
+    cv_only=False,
+    detector_config=None,
 ):
     episode = Episode.load(episode)
     config = config or SelectionConfig()
@@ -101,7 +103,17 @@ def run(
         provider = lambda image: detect_labels(
             image, rois, min_edge_px=config.min_projected_edge_px
         )
-    selected = select_frames(episode, provider, config, frame, refine=observations is None)
+    if cv_only:
+        if detector != "cv" or frame is not None or observations is not None or rois is not None:
+            raise ValueError(
+                "Tracked CV requires a full video without fixed-frame/ROI observations"
+            )
+        from vive_correct.estimate.cv_tracking import select_episode
+
+        selected = select_episode(episode, config, detector_config)
+        identity = "cv_tracked_uncrossed_initialization_unverified"
+    else:
+        selected = select_frames(episode, provider, config, frame, refine=observations is None)
     out_dir = (
         Path(out_dir)
         if out_dir
@@ -136,12 +148,47 @@ def run(
         "pose_accuracy_validated": False,
         "observations": [],
     }
+    if cv_only:
+        report.update(
+            {
+                key: selected[key]
+                for key in (
+                    "tracking_events",
+                    "track_observations",
+                    "side_assignment",
+                    "identity_verified",
+                    "detector_config",
+                    "examined_frames",
+                )
+            }
+        )
+        report["human_verified"] = False
     for i, observation in enumerate(selected["observations"]):
         image = observation["image"]
         labels = observation["labels"]
-        source_path = out_dir / f"frame_{observation['frame_index']:06d}.png"
-        overlay_path = out_dir / f"frame_{observation['frame_index']:06d}_axes.png"
+        suffix = "_" + "_".join(sorted(labels)) if cv_only else ""
+        source_path = out_dir / f"frame_{observation['frame_index']:06d}{suffix}.png"
+        overlay_path = out_dir / f"frame_{observation['frame_index']:06d}{suffix}_axes.png"
         overlay = draw_poses(image, labels, episode.camera)
+        if cv_only:
+            for row, (side, pose) in enumerate(labels.items()):
+                evidence = pose["cv_diagnostics"]
+                text = (
+                    f"{side} white={evidence['white_fraction']:.2f} "
+                    f"shell={evidence['dark']:.2f} "
+                    f"edge={min(evidence['edge_support']):.2f} "
+                    f"shift={evidence['refinement_shift']:.2f}px | identity assumed"
+                )
+                cv2.putText(
+                    overlay,
+                    text,
+                    (20, 35 + row * 30),
+                    cv2.FONT_HERSHEY_SIMPLEX,
+                    0.65,
+                    (0, 255, 255),
+                    2,
+                    cv2.LINE_AA,
+                )
         save_image(source_path, image)
         save_image(overlay_path, overlay)
         if i == 0:

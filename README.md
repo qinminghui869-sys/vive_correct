@@ -37,6 +37,14 @@ python3 -m vive_correct view outputs/demo
 
 相同命令可恢复未完成的运行。更换模型、参数、输入或代码后，请使用新的输出目录。
 
+## 纯 OpenCV 模式
+
+```bash
+python3 -m vive_correct run --profile cv --dataset samples --out outputs/cv_run --jobs 4
+```
+
+不调用模型，使用白色／黑色外壳检查、四角精修和连续光流关联，每手保留一个最佳观测。首次可靠双手窗口必须未交叉；身份不确定时输出缺失。如需优先导出每段的左右候选特征图，可加 `--stage features`；同帧双手优先，缺失输入明确标记。参数、诊断字段和人工验收方法见[纯 CV 指南](docs/cv_detection.md)。
+
 ## 查看手部数据
 
 ```bash

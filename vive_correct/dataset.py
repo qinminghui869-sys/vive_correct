@@ -80,6 +80,12 @@ def make_run_plan(args, dataset, selection, initial_mount, model_config=None):
         model = "cv-only"
     else:
         model = args.model or (args.codex_model if args.transport == "codex" else None)
+    if args.qwen_review == "off" and (args.profile == "cv" or not args.fixed_candidates):
+        from vive_correct.estimate.cv_config import CVConfig
+
+        parameters["cv_detector"] = CVConfig.load(getattr(args, "cv_config", None)).report()
+        parameters["auto_rescan"] = False
+        parameters["scan_mode"] = "sequential_identity_tracking"
     references = {}
     for key, path in (("initial_mount", initial_mount), ("axis_baseline", args.axis_baseline)):
         if path is not None:

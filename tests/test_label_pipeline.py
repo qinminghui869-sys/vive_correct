@@ -24,7 +24,13 @@ from vive_correct.estimate.geometry import (
     estimate_pose,
     order_quad,
 )
-from vive_correct.estimate.label_detection import detect_labels
+from vive_correct.estimate.label_detection import (
+    BORDER_MIN_DARK,
+    black_border_score,
+    detect_labels,
+    label_likeness_score,
+    select_best_label_frames,
+)
 from vive_correct.estimate.plot_three_views_new import render
 from vive_correct.estimate.sticker_pipeline import read_observations, run
 
@@ -278,6 +284,41 @@ class InterfaceTests(unittest.TestCase):
         image = np.full((480, 640, 3), 180, np.uint8)
         cv2.ellipse(image, (180, 350), (75, 55), 0, 0, 360, (15, 15, 15), -1)
         self.assertTrue(all(not values for values in detect_labels(image).values()))
+
+    def test_white_label_on_black_shell_is_detected(self):
+        image = np.full((480, 640, 3), 180, np.uint8)
+        cv2.ellipse(image, (160, 360), (90, 70), 0, 0, 360, (20, 20, 20), -1)
+        cv2.rectangle(image, (130, 340), (190, 376), (230, 230, 230), -1)
+        gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+        quad = np.array([[130, 340], [190, 340], [190, 376], [130, 376]], float)
+        self.assertGreaterEqual(black_border_score(gray, quad), BORDER_MIN_DARK)
+        found = detect_labels(image)
+        self.assertTrue(found["left"])
+        self.assertFalse(found["right"])
+
+    def test_white_label_without_black_border_is_rejected(self):
+        image = np.full((480, 640, 3), 200, np.uint8)
+        cv2.rectangle(image, (130, 340), (190, 376), (240, 240, 240), -1)
+        gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+        quad = np.array([[130, 340], [190, 340], [190, 376], [130, 376]], float)
+        self.assertLess(black_border_score(gray, quad), BORDER_MIN_DARK)
+        found = detect_labels(image, {"left": [0, 0, 320, 480]})
+        self.assertFalse(found["left"])
+
+    def test_select_best_label_frames_keeps_one_side_each(self):
+        weak = np.full((480, 640, 3), 180, np.uint8)
+        cv2.ellipse(weak, (160, 360), (90, 70), 0, 0, 360, (40, 40, 40), -1)
+        cv2.rectangle(weak, (130, 340), (190, 376), (230, 230, 230), -1)
+        strong = np.full((480, 640, 3), 180, np.uint8)
+        cv2.ellipse(strong, (160, 360), (100, 80), 0, 0, 360, (15, 15, 15), -1)
+        cv2.rectangle(strong, (125, 338), (195, 380), (235, 235, 235), -1)
+        gray = cv2.cvtColor(strong, cv2.COLOR_BGR2GRAY)
+        quad = np.array([[125, 338], [195, 338], [195, 380], [125, 380]], float)
+        self.assertGreater(label_likeness_score(gray, quad), 0)
+        best = select_best_label_frames([(3, weak), (9, strong), (12, weak)])
+        self.assertIn("left", best)
+        self.assertEqual(best["left"]["frame_index"], 9)
+        self.assertNotIn("right", best)
 
     def test_review_file_cannot_silently_change_episode(self):
         episode = Episode(Path("/correct"), Path("/video"), None, np.arange(100))

@@ -100,8 +100,8 @@ _RUN_TYPES = {
 def run_settings(profile="astra"):
     """Load a complete preset; reject misspelled or invalid tuning parameters."""
     document = yaml.safe_load((_DIR / "run.yaml").read_text(encoding="utf-8"))
-    if not isinstance(document, dict) or set(document) != {"astra", "legacy"}:
-        raise ValueError("run.yaml: expected astra and legacy profiles")
+    if not isinstance(document, dict) or set(document) != {"astra", "legacy", "cv"}:
+        raise ValueError("run.yaml: expected astra, legacy and cv profiles")
     if profile not in document:
         raise ValueError(f"Unknown run profile: {profile}")
     for name, values in document.items():
