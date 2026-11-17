@@ -1,6 +1,6 @@
 # 人工审核、RRD 导出与源数据重建
 
-前提：已按 [纯 CV 指南](cv_detection.md) 生成 `<out>/features/`。以下命令始终使用同一个输出目录。
+前提：已按 [纯 CV 指南](cv_detection.md) 生成 `<out>/features/`，默认快速选帧即可。以下命令始终使用同一个输出目录；达到扫描预算而缺手的数据也可进入人工补标。
 
 ## 1. 通过审核
 
@@ -44,6 +44,8 @@ python3 -m vive_correct rebuild --out outputs/cv --in-place \
 
 仅有完整有效审核依据的数据能够重建；单条失败不阻断其他数据，结果记录在 `rebuild_manifest.json`。`review`、`repair`、`rebuild` 均支持 `--initial-mount FILE`，应始终使用同一份相机外参。
 
+重建需要保留完整的 `features/`、当前 `approved/<版本>/` 依据包及原始数据目录，不能仅提供偏移 JSON。源视频、时间戳和标定仍参与输入校验；已有覆盖记录时还需要初始 `.parquet.bak` 与 `<episode>/.vive_rebuild/`。无需先导出 RRD 或生成修正 Parquet。
+
 六个文件位于 `<episode>/data/chunk-000/episode_000000/`：
 
 - `observation.{left,right}_wrist_pose.parquet`：有效 `x/y/z`。
@@ -59,6 +61,8 @@ python3 -m vive_correct rebuild --out outputs/cv --in-place \
 
 仅做固定世界平移，保留原旋转。各文件按自身行数处理，保留行序、时间戳、缺失值、非目标字段和 Arrow schema 元数据；某组 xyz 不完整时整组保持原值。标签中心不等于已标定的 Vive 内部原点。
 
+固定偏移不会随设备旋转，不能保证整段视频始终贴合标签；单参考帧残差为零不代表整段准确。深度与 PnP 差异较大时，应核实标签尺寸、角点、深度和相机标定。
+
 ## 备份与恢复
 
 覆盖前先生成、校验全部六个文件，再保存初始 `.parquet.bak` 并逐文件替换。六文件校验成功后才发布完成状态；写入失败回滚到本次执行前版本，进程中断后下次操作先恢复。
@@ -68,9 +72,17 @@ python3 -m vive_correct rebuild --out outputs/cv --in-place \
 ## 产物与排查
 
 ```text
+<out>/features/.../features.json       # 自动候选及输入来源
 <out>/features/.../human_review.json   # 可暂存的人工选择
 <out>/features/.../approval.json       # 当前有效依据包指针
-<out>/approved/<版本>/                 # 审核快照、观测、偏移、图片、修正文件
+<out>/approved/<版本>/
+  human_review.json                   # 审核快照
+  observations.json                   # 参考帧、时间戳、四角和 PnP 结果
+  wrist_alignment.json                # 世界偏移、原始腕部姿态、深度结果
+  camera_mount.json                   # 相机外参快照
+  {left,right}_frame_<帧号>{,_quad}.png # 原帧和四角叠图
+  bundle.json                         # 依据包索引和校验值
+  corrected_*/                        # 导出或重建时才生成修正 Parquet
 <out>/repairs/<运行>/rerun/             # recording.rrd、统计与 render.log
 <out>/repair_manifest.json             # RRD 导出结果
 <out>/rebuild_manifest.json            # 六文件重建结果
@@ -80,6 +92,7 @@ python3 -m vive_correct rebuild --out outputs/cv --in-place \
 - **未找到特征帧**：检查 `--out` 是否指向检测输出；新终端中的 `$vive_out` 可能为空，可直接使用绝对路径。
 - **待审核或依据过期**：重新加载该条并点击“通过审核”。输入、人工选择、标定或计算代码变化都会使旧依据失效。
 - **四角、同步或求解失败**：人工修改仍保留；按具体原因调整参考帧或角点后重新提交。
+- **重投影误差超限**：提示中会列出手侧、帧号、实际误差和阈值。展开四角调整并放大，将角点对齐白色标签四角；仍失败则重选清晰帧。该误差衡量标注与标签几何模型是否一致，不应通过提高阈值强行通过。
 - **导出失败**：查看对应运行的 `render.log`；不要把排队或处理中视为完成。
 
 未变化的完整产物会复用缓存。字段定义见 [报告接口](observations_schema.md)，开发与验证见 [开发说明](development.md)。

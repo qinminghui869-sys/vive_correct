@@ -1,4 +1,4 @@
-"""Whole-video feature-image selection, with same-frame pairs preferred.
+"""Bounded feature selection by default; optional full coarse-to-dense recovery.
 
 These are appearance candidates, not accepted poses or verified physical hands.
 """
@@ -154,18 +154,32 @@ def feature_video_signature(episode):
     )
 
 
-def feature_scan_phases(limit, fps, stride, config):
+def feature_scan_phases(limit, fps, stride, config, *, search="fast"):
     """Half-open frame ranges; sampling is anchored at each range start."""
     if not np.isfinite(fps) or fps <= 0:
         raise ValueError("invalid_video_fps")
     if type(stride) is not int or stride < 1:
         raise ValueError("Feature scan stride must be positive")
+    if search not in ("fast", "full"):
+        raise ValueError("Feature search must be fast or full")
     split = min(limit, int(np.ceil(config.feature_initial_seconds * fps)))
-    return [
+    initial_stride = config.feature_initial_stride
+    if search == "fast":
+        # Reserve samples for the entire later interval, not only the video prefix.
+        early_budget = (
+            config.feature_fast_max_samples // 2
+            if split < limit
+            else config.feature_fast_max_samples
+        )
+        initial_stride = max(initial_stride, int(np.ceil(split / early_budget)))
+        later_budget = config.feature_fast_max_samples - len(range(0, split, initial_stride))
+        if split < limit:
+            stride = max(stride, int(np.ceil((limit - split) / later_budget)))
+    phases = [
         dict(
             name="initial",
             ranges=[
-                dict(start=0, stop=split, stride=config.feature_initial_stride),
+                dict(start=0, stop=split, stride=initial_stride),
                 dict(start=split, stop=limit, stride=stride),
             ],
         ),
@@ -177,9 +191,12 @@ def feature_scan_phases(limit, fps, stride, config):
         ),
         dict(name="full_recovery", ranges=[dict(start=0, stop=limit, stride=1)]),
     ]
+    return phases[:2] if search == "fast" else phases
 
 
-def scan_features(episode, output, config, stride=15, max_frames=None):
+def scan_features(episode, output, config, stride=15, max_frames=None, *, search="fast"):
+    if search not in ("fast", "full"):
+        raise ValueError("Feature search must be fast or full")
     cv2.setNumThreads(1)
     start = time.perf_counter()
     output.mkdir(parents=True, exist_ok=True)
@@ -199,6 +216,13 @@ def scan_features(episode, output, config, stride=15, max_frames=None):
         examined_frames=0,
         decoded_frames=0,
         stride=stride,
+        search_mode=search,
+        max_frames=max_frames,
+        stop_reason="scan_complete",
+        scan_budget=dict(
+            max_samples=config.feature_fast_max_samples if search == "fast" else None,
+            timeout_s=config.feature_fast_timeout_s if search == "fast" else None,
+        ),
     )
     best, pairs, error = {}, [], None
     candidate_pool = []
@@ -218,16 +242,27 @@ def scan_features(episode, output, config, stride=15, max_frames=None):
         error = "invalid_video_fps"
     else:
         seen = set()
-        for phase in feature_scan_phases(limit, fps, stride, config):
+        stopped = False
+        last_progress = start
+        print(f"Feature scan: {episode.name} search={search}, frames={limit}", flush=True)
+        for phase in feature_scan_phases(limit, fps, stride, config, search=search):
             if report["scan_phases"] and len(best) == 2:
                 break
             if all(r["start"] >= r["stop"] for r in phase["ranges"]):
                 continue
             phase["examined_frames"] = 0
+            phase_start = time.perf_counter()
             report["scan_phases"].append(phase)
             if phase["name"] != "initial":
                 capture.set(cv2.CAP_PROP_POS_FRAMES, 0)
             for index in range(limit):
+                if search == "fast":
+                    if report["examined_frames"] >= config.feature_fast_max_samples:
+                        report["stop_reason"], stopped = "sample_budget", True
+                        break
+                    if time.perf_counter() - start >= config.feature_fast_timeout_s:
+                        report["stop_reason"], stopped = "time_budget", True
+                        break
                 if not capture.grab():
                     error = f"decode_failed_at_{index}"
                     break
@@ -289,11 +324,27 @@ def scan_features(episode, output, config, stride=15, max_frames=None):
                         best[side] = item
                 if len(current) == 2:
                     pairs.append(current)
-            if error:
+                if search == "fast" and len(best) == 2:
+                    selected, _ = choose_features(best, pairs, config.pair_quality_ratio)
+                    if all(c["status"] == "appearance_candidate" for c in selected.values()):
+                        report["stop_reason"], stopped = "bilateral_candidates", True
+                        break
+                now = time.perf_counter()
+                if now - last_progress >= 5:
+                    print(
+                        f"Feature progress: {episode.name} phase={phase['name']} "
+                        f"examined={report['examined_frames']}, elapsed={now - start:.1f}s",
+                        flush=True,
+                    )
+                    last_progress = now
+            phase["seconds"] = round(time.perf_counter() - phase_start, 3)
+            if error or stopped:
                 break
 
     if capture:
         capture.release()
+    if error:
+        report["stop_reason"] = "error"
     selected, report["mode"] = choose_features(best, pairs, config.pair_quality_ratio)
     return _finish_features(report, selected, output, config, candidate_pool, start, error)
 
@@ -365,7 +416,11 @@ def _finish_features(report, selected, output, config, candidate_pool, start, er
             report["missing_hands"].append(side)
             _write_image(
                 feature_path,
-                _missing_feature(side, error or "no candidate passed appearance gates"),
+                _missing_feature(
+                    side,
+                    error
+                    or f"{report.get('stop_reason', 'scan_complete')}: manual annotation available",
+                ),
             )
     if cap:
         cap.release()
@@ -528,10 +583,12 @@ def run_feature_dataset(args, dataset, output, config):
     if not episodes:
         raise ValueError("No episodes found")
     stride = args.coarse_stride
+    search = getattr(args, "feature_search", "fast")
     if stride < 1:
         raise ValueError("Feature scan stride must be positive")
     plan = dict(
         mode="cv_features",
+        search_mode=search,
         detector_config=config.report(),
         source_hashes=source_hashes(),
         stride=stride,
@@ -545,6 +602,9 @@ def run_feature_dataset(args, dataset, output, config):
             for p in episodes
         ],
     )
+    if getattr(args, "dry_run", False):
+        print(json.dumps(plan, ensure_ascii=False, indent=2))
+        return 0
     output.mkdir(parents=True, exist_ok=True)
     plan_path = output / "feature_plan.json"
     if plan_path.exists() and json.loads(plan_path.read_text()) != plan:
@@ -568,15 +628,18 @@ def run_feature_dataset(args, dataset, output, config):
                 paths.append(report["human_review_file"])
             if (
                 report.get("schema_version") == 2
+                and report.get("search_mode") == search
                 and all(Path(p).is_file() for p in paths)
                 and not report.get("error")
             ):
                 reports[str(episode)] = report
                 continue
         pending.append((episode, folder))
-    with ProcessPoolExecutor(max_workers=args.jobs) as pool:
+    with ProcessPoolExecutor(max_workers=min(args.jobs, max(1, len(pending)))) as pool:
         futures = {
-            pool.submit(scan_features, ep, folder, config, stride, args.max_frames): ep
+            pool.submit(
+                scan_features, ep, folder, config, stride, args.max_frames, search=search
+            ): ep
             for ep, folder in pending
         }
         for future in as_completed(futures):
@@ -584,7 +647,10 @@ def run_feature_dataset(args, dataset, output, config):
             reports[str(ep)] = future.result()
             print(
                 f"[{len(reports)}/{len(episodes)}] {ep.parent.name}/{ep.name}: "
-                f"{reports[str(ep)]['mode']}, sides={list(reports[str(ep)]['features'])}",
+                f"{reports[str(ep)]['mode']}, sides={list(reports[str(ep)]['features'])}, "
+                f"stop={reports[str(ep)]['stop_reason']}, "
+                f"examined={reports[str(ep)]['examined_frames']}, "
+                f"elapsed={reports[str(ep)]['seconds']:.1f}s",
                 flush=True,
             )
             render_features(
@@ -608,7 +674,14 @@ def refilter_features(source_folder, output, config, rescan_missing=True):
         )
         raise ValueError("Only rectified video candidate caches are supported; rescan required")
     if not expected_video.is_file():
-        return scan_features(Path(previous["episode"]), output, config, previous["stride"])
+        return scan_features(
+            Path(previous["episode"]),
+            output,
+            config,
+            previous["stride"],
+            max_frames=previous.get("max_frames"),
+            search=previous.get("search_mode", "full"),
+        )
     cache_key = hashlib.sha256(
         (
             source_folder.joinpath("features.json").read_text()
@@ -667,7 +740,14 @@ def refilter_features(source_folder, output, config, rescan_missing=True):
         if side not in best or candidate["selection_score"] > best[side]["selection_score"]:
             best[side] = candidate
     if len(best) < 2 and rescan_missing:
-        result = scan_features(Path(previous["episode"]), output, config, previous["stride"])
+        result = scan_features(
+            Path(previous["episode"]),
+            output,
+            config,
+            previous["stride"],
+            max_frames=previous.get("max_frames"),
+            search=previous.get("search_mode", "full"),
+        )
         result["refilter_cache_key"] = cache_key
         result["cache_source"] = str(source_folder)
         result["cache_action"] = "rescanned_missing_side"

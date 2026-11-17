@@ -1,27 +1,26 @@
 # 纯 CV 指南
 
-不调用模型：白色／黑色外壳外观检查 → 四角精修 → 连续光流关联；每手保留一个最佳观测，供人工审核与后续位置修正。
+默认采用快速选帧，不调用模型、不运行整段身份跟踪。输出待人工确认的特征图、原帧、四角和候选池；之后的审核、RRD 与六文件重建流程不变。
 
 ## 一键检测
 
 ```bash
-bash scripts/run_cv.sh samples outputs/cv_full --jobs 4
+# 默认快速模式；只处理 JSON 清单中的数据
+bash scripts/run_cv.sh /path/to/dataset outputs/cv_fast \
+  --episodes-file /path/to/episodes.json --jobs 4
+
+# 完整选帧：关闭快速预算与提前结束，恢复原有加密和逐帧补扫
+bash scripts/run_cv.sh samples outputs/cv_full --feature-search full --jobs 4
+
+# 完整选帧之前额外执行整段身份跟踪
+bash scripts/run_cv.sh samples outputs/cv_tracked --stage all --feature-search full
 ```
 
-强制 `--profile cv --stage all --model-review off`，顺序跑：连续跟踪与几何 → 特征选帧 → 审核材料。日志写入 `<out>/run.log`。
+脚本默认 `--profile cv --stage features --model-review off`，显式 `--stage` 可以覆盖默认值，日志写入 `<out>/run.log`。直接运行 `python3 -m vive_correct run --profile cv` 也默认选择 `features`；模型配置档仍默认 `all`。
 
-```bash
-# 限样本 / 覆盖参数 / 短片冒烟（须用单独输出目录）
-bash scripts/run_cv.sh samples outputs/cv_full40 \
-  --episodes-file outputs/cv_original40.json --jobs 4
-bash scripts/run_cv.sh samples outputs/cv_smoke --max-frames 120 --jobs 2
+清单为相对数据集根目录的路径数组，例如 `["desk/episode_a", "dining/episode_b"]`；省略 `--episodes-file` 则处理全部数据。
 
-# 只出特征图（不做身份跟踪）
-python3 -m vive_correct run --profile cv --stage features \
-  --dataset samples --out outputs/cv_features --jobs 8
-```
-
-`--dry-run` 只检查运行计划。配置变化、截断结果与完整结果不要混用同一输出目录。
+`--dry-run` 预览计划，`--max-frames 120` 可做短片冒烟。模式、参数、代码或输入变化时换新输出目录，避免把旧缓存当新结果。只有四条数据时，提高数据级 `--jobs` 到 4 以上不会增加实际并发。
 
 ### 输入与输出
 
@@ -33,24 +32,36 @@ python3 -m vive_correct run --profile cv --stage features \
 
 # 输出
 <out>/run.log
-<out>/estimates/<场景>/<样本>/          # 跟踪与几何
+<out>/estimates/<场景>/<样本>/          # 仅 --stage all/estimate/scan 生成
 <out>/features/<场景>/<样本>/           # 特征图、原帧、四角、审核模板
-<out>/batch/delivery/index.html         # 特征入口 → tracked.html
+<out>/batch/delivery/index.html         # 特征入口；显式跟踪后另有 tracked.html
 ```
 
 退出码 0 不表示每条双侧正确或已验收。双手可来自不同帧，不能算同时刻相对位姿。
 
 ## 流程要点
 
-**特征扫描（三阶段）**
+**默认快速扫描**
 
-1. 前 10 秒每 5 帧，之后每 `--coarse-stride` 帧（默认 15）
-2. 仍缺任一侧 → 后段每 5 帧补扫
-3. 仍缺 → 全段逐帧；仍失败则报告缺失，不降外观门槛
+- 每条最多检测 120 帧、扫描软时限 30 秒；单次检测或视频 I/O 不会被强行中断，图片落盘时间也可能使总耗时略超预算。
+- 前 10 秒优先采样，并为后段保留预算；长视频自动增大采样步长，采样计划覆盖后段。达到时限可能提前结束，不能保证遍历整段视频；不进行全片逐帧兜底。
+- 双侧候选均通过原有严格外观检查时提前结束；已有合格同帧组合优先，否则允许不同帧。仍须人工确认物理侧别和几何，不保证找到全片最高分。
+- 未找到双手也输出审核材料，保留已有候选，可在审核工具中浏览整段视频补标。预算耗尽不等于源视频没有标签。
 
-同帧双手优先：若两侧都达到各自最佳分的 `pair_quality_ratio`（默认 0.70），选同帧组合。`features.json` 记录 FPS、抽样阶段与诊断。
+预算可通过 `--cv-config` 指定部分配置：
 
-**身份跟踪**
+```yaml
+feature_fast_max_samples: 120
+feature_fast_timeout_s: 30.0
+```
+
+**完整扫描（`--feature-search full`）**
+
+前 10 秒每 5 帧、后段每 `--coarse-stride` 帧（默认 15）扫描；缺手时后段每 5 帧补扫，再全段逐帧兜底。首轮不会因发现双手而立即停止，仍未检出则报告缺失，不降低外观门槛。
+
+两种模式都优先满足 `pair_quality_ratio`（默认 0.70）的同帧组合。`features.json` 记录 `search_mode`、`scan_budget`、`stop_reason`、检测/解码帧数及各阶段耗时；日志定期显示进度。停止原因包括 `bilateral_candidates`、`sample_budget`、`time_budget`、`scan_complete`、`error`。
+
+**可选身份跟踪**
 
 - 首个可靠双手窗口假设未交叉（画面左→物理左）；相机不得镜像
 - 初始化需连续 `tracking_window` 帧（默认 5）可靠双侧关联

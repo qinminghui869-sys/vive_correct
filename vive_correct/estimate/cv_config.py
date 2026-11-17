@@ -11,6 +11,8 @@ import yaml
 
 @dataclass(frozen=True)
 class CVConfig:
+    feature_fast_max_samples: int = 120
+    feature_fast_timeout_s: float = 30.0
     feature_initial_seconds: float = 10.0
     feature_initial_stride: int = 5
     feature_recovery_stride: int = 5
@@ -59,9 +61,16 @@ class CVConfig:
     association_margin: float = 0.10
 
     def __post_init__(self):
-        for name in ("feature_initial_stride", "feature_recovery_stride", "tracking_window"):
+        for name in (
+            "feature_fast_max_samples",
+            "feature_initial_stride",
+            "feature_recovery_stride",
+            "tracking_window",
+        ):
             if type(getattr(self, name)) is not int or getattr(self, name) < 1:
                 raise ValueError(f"{name} must be a positive integer")
+        if self.feature_fast_max_samples < 2:
+            raise ValueError("feature_fast_max_samples must be >= 2")
         if self.tracking_window < 3 or self.tracking_window % 2 == 0:
             raise ValueError("tracking_window must be odd and >= 3")
         for name in ("thresholds", "approx_epsilons"):

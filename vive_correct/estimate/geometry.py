@@ -33,6 +33,16 @@ CORNER_NOISE_SIGMA_PX = _GEOMETRY["corner_noise_sigma_px"]
 CORNER_NOISE_TRIALS = _GEOMETRY["corner_noise_trials"]
 
 
+class ReprojectionError(ValueError):
+    """Keep the measured error available to review clients."""
+
+    def __init__(self, rms_px, limit_px):
+        self.rms_px, self.limit_px = rms_px, limit_px
+        super().__init__(
+            f"Label reprojection RMS exceeds {limit_px:g} px (measured {rms_px:.6g} px)"
+        )
+
+
 @dataclass(frozen=True)
 class Camera:
     K: np.ndarray
@@ -187,11 +197,10 @@ def local_basis(R, t, camera):
 def estimate_pose(
     quad, camera, min_edge_px=MIN_EDGE_PX, *, allow_origin_only=False, device_fixed=True
 ):
-    candidates = [
-        item for item in pose_candidates(quad, camera, min_edge_px) if item["rms_px"] <= MAX_RMS_PX
-    ]
+    solutions = pose_candidates(quad, camera, min_edge_px)
+    candidates = [item for item in solutions if item["rms_px"] <= MAX_RMS_PX]
     if not candidates:
-        raise ValueError(f"Label reprojection RMS exceeds {MAX_RMS_PX:g} px")
+        raise ReprojectionError(solutions[0]["rms_px"], MAX_RMS_PX)
     best = basis = None
     for candidate in [] if device_fixed else candidates:
         try:

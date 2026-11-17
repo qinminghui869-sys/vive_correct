@@ -12,6 +12,7 @@ import pyarrow.parquet as pq
 from test_human_review import make_fixture
 
 from vive_correct.batch.report_io import digest
+from vive_correct.estimate.geometry import Camera
 from vive_correct.human_review import ReviewStore, source_signature
 from vive_correct.parquet_correction import position_groups, verify_table
 from vive_correct.review_actions import export_approved, rebuild
@@ -64,6 +65,50 @@ class RebuildTests(unittest.TestCase):
             )
         )
         self.assertTrue(review_state(self.store, 0, self.mount)["approved"])
+
+    def test_reprojection_failure_identifies_side_and_preserves_draft(self):
+        # Regression: the desk label is visible, but its four corners do not fit
+        # the calibrated rectangle within 6 px. Never approve by relaxing the gate.
+        camera = Camera(
+            np.array(
+                [
+                    [811.1893512894039, 0, 937.2783966064453],
+                    [0, 811.1893512894039, 600.5800399780273],
+                    [0, 0, 1],
+                ]
+            ),
+            (1920, 1200),
+            "regression",
+        )
+        quad = [[68.0, 742.0], [230.0, 720.0], [180.0, 798.0], [48.0, 804.0]]
+        before = self.hashes()
+        initial = self.store.load(0)
+        for side, label in (("left", "左手"), ("right", "右手")):
+            state = self.store.load(0)
+            state["reviewer"] = "test-reviewer"
+            state["selected"] = {
+                s: dict(c, status="accepted", physical_side=s)
+                for s, c in initial["selected"].items()
+            }
+            state["selected"][side].update(frame_index=2, quad=quad)
+            with (
+                self.subTest(side=side),
+                patch("vive_correct.human_review.Camera.load", return_value=camera),
+                patch(
+                    "vive_correct.human_review.decode_frame",
+                    return_value=(np.zeros((1200, 1920, 3), dtype=np.uint8), 4),
+                ),
+                patch("vive_correct.rerun_export.export_recordings") as render,
+                self.assertRaisesRegex(ValueError, f"{label}第 2 帧：重投影误差 6.94 px.*6 px"),
+            ):
+                approve(self.store, 0, state, self.mount)
+            render.assert_not_called()
+            saved = self.store.load(0)
+            self.assertEqual(saved["selected"][side]["quad"], quad)
+            self.assertEqual(saved["selected"][side]["frame_index"], 2)
+            self.assertEqual(saved["status"], "pending")
+            self.assertFalse(self.store.path(0).with_name("approval.json").exists())
+            self.assertEqual(before, self.hashes())
 
     def test_six_tables_preserve_nulls_partial_xyz_rotations_and_rows(self):
         path = self.episode / DATA / "observation.hand_left_points.parquet"

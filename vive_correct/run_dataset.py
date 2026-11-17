@@ -205,12 +205,12 @@ def main(argv=None):
         "--profile",
         choices=("astra", "legacy", "cv"),
         default="astra",
-        help="cv: offline sequential tracking; astra (default): model review; legacy: API defaults",
+        help="cv: fast offline feature selection; astra (default): model review; legacy: API defaults",
     )
     parser.add_argument(
         "--dry-run",
         action="store_true",
-        help="Print the effective plan without model requests or output writes (stage all)",
+        help="Print the effective plan without model requests or output writes (all/features)",
     )
     parser.add_argument("--dataset", type=Path, default=DEFAULT_DATASET)
     parser.add_argument(
@@ -222,7 +222,14 @@ def main(argv=None):
     parser.add_argument(
         "--stage",
         choices=("all", "estimate", "scan", "features", "finish", "gallery", "rerun"),
-        default="all",
+        default=None,
+        help="Default: features for cv, all for model profiles; all includes CV identity tracking",
+    )
+    parser.add_argument(
+        "--feature-search",
+        choices=("fast", "full"),
+        default="fast",
+        help="fast: early stop and bounded scanning; full: original coarse-to-dense recovery",
     )
     parser.add_argument(
         "--rerun", action="store_true", help="Export full Rerun recordings after repair"
@@ -310,6 +317,8 @@ def main(argv=None):
     parser.set_defaults(**{k: v for k, v in preset.items() if k != "tracker_guided_frames"})
     parser.add_argument("--cv-config", type=Path, help="Partial overrides for config/cv.yaml")
     args = parser.parse_args(argv)
+    if args.stage is None:
+        args.stage = "features" if args.profile == "cv" else "all"
     if args.profile == "cv":
         args.qwen_review = "off"
         args.tracker_guided_frames = 0
@@ -331,8 +340,8 @@ def main(argv=None):
             args.window = defaults.window
     dataset, output = args.dataset.resolve(), args.out.resolve()
     try:
-        if args.dry_run and args.stage != "all":
-            raise ValueError("--dry-run requires --stage all")
+        if args.dry_run and args.stage not in ("all", "features"):
+            raise ValueError("--dry-run requires --stage all or features")
         if args.baseline_only and (args.stage != "all" or not args.axis_baseline):
             raise ValueError("--baseline-only requires --stage all and --axis-baseline")
         render = args.rerun or args.open_rerun or args.stage == "rerun"

@@ -17,7 +17,7 @@ python3 -m pip install -r requirements.txt
 ## 推荐流程（纯 CV）
 
 ```bash
-# 1. 检测：跟踪 + 特征选帧 + 审核材料
+# 1. 快速选帧：有界扫描 + 审核材料
 bash scripts/run_cv.sh /path/to/dataset outputs/cv --jobs 4
 
 # 2. 浏览器审核（默认 http://127.0.0.1:18763）
@@ -28,7 +28,9 @@ python3 -m vive_correct review --out outputs/cv
 python3 -m vive_correct view outputs/cv
 ```
 
-打开 `outputs/cv/batch/delivery/index.html` 看特征图；`tracked.html` 是跟踪报告。只读矫正左目，不回退原始视频；不调用模型。
+打开 `outputs/cv/batch/delivery/index.html` 看特征图。默认跳过身份跟踪，每条最多检测 120 帧、扫描软时限 30 秒；双侧严格外观候选齐全则提前结束，缺手仍可人工补标。只读矫正左目，不调用模型。
+
+需要完整补扫时加 `--feature-search full`；需要逐帧身份跟踪时再加 `--stage all`。不同模式使用独立输出目录。
 
 常用选项：`--episodes-file` 限样本、`--dry-run` 只预览计划、`--port` 换审核端口、`--initial-mount` 指定头相机外参。检测参数见 [纯 CV 指南](docs/cv_detection.md)。
 
@@ -56,7 +58,8 @@ python3 open_file.py /path/to/episode    # 手动调腕部
 - 原点是 **50×30 mm 标签中心**，不是已标定的 Vive 内部原点。
 - 无安装方向参考时只输出中心，不生成设备坐标轴。
 - 重投影误差、检出率 ≠ 实测位置精度。
-- 默认头相机外参是安装近似；其他设备用 `--initial-mount`。
+- 固定世界平移仅对齐参考时刻，不能保证手腕转动后标签中心仍与修正原点重合。
+- 默认头相机外参是安装近似；同类左目设备可用 `--initial-mount` 指定外参。当前不支持切换到眼动相机完成识别与重建。
 - 自动结果默认未人工核验；交叉后的物理左右手需审核确认。
 
 ## 文档

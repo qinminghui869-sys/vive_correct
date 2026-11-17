@@ -1,4 +1,6 @@
 # Feature scan: early interval / late coarse scan / late recovery / full-frame recovery.
+feature_fast_max_samples: 120
+feature_fast_timeout_s: 30.0
 feature_initial_seconds: 10.0
 feature_initial_stride: 5
 feature_recovery_stride: 5

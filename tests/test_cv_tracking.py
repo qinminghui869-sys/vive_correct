@@ -92,6 +92,9 @@ class DetectorTests(unittest.TestCase):
             self.assertNotEqual(changed.report()["sha256"], CVConfig.load().report()["sha256"])
             for text in (
                 "unknown: 1",
+                "feature_fast_max_samples: 1",
+                "feature_fast_max_samples: 2.5",
+                "feature_fast_timeout_s: 0",
                 "min_white_fraction: 2",
                 "min_contrast: .nan",
                 "thresholds: [true]",
@@ -247,7 +250,7 @@ class OfflinePipelineTests(unittest.TestCase):
                 )
             )
             for flags, folder in (
-                (["--profile", "cv", "--model-review", "on"], "cv"),
+                (["--profile", "cv", "--model-review", "on", "--stage", "all"], "cv"),
                 (["--model-review", "off"], "off"),
             ):
                 args = [

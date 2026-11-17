@@ -1,4 +1,5 @@
 import json
+from dataclasses import replace
 from pathlib import Path
 from tempfile import TemporaryDirectory
 import unittest
@@ -54,8 +55,6 @@ class ContextTests(unittest.TestCase):
         self.assertFalse(label_metrics(image, quads[0])["accepted"])
 
     def test_surround_threshold_changes_only_context_classification(self):
-        from dataclasses import replace
-
         image, quads = fixture()
         image[np.all(image == 180, axis=2)] = 110
         default = CVConfig.load()
@@ -152,6 +151,8 @@ class FeatureTests(unittest.TestCase):
             writer.release()
             result = scan_features(root / "episode", root / "out", CVConfig.load(), stride=3)
             self.assertEqual(result["mode"], "same_frame")
+            self.assertEqual(result["stop_reason"], "bilateral_candidates")
+            self.assertEqual(result["examined_frames"], 1)
             self.assertEqual([p["name"] for p in result["scan_phases"]], ["initial"])
             self.assertEqual(set(result["features"]), {"left", "right"})
             self.assertFalse(result["human_verified"])
@@ -169,6 +170,24 @@ class FeatureTests(unittest.TestCase):
                 self.assertTrue(Path(item["clean_frame_image"]).is_file())
                 self.assertEqual(item["image_size_px"], [640, 400])
                 np.testing.assert_allclose(item["label_center_px"][1], 300, atol=2)
+            full = scan_features(
+                root / "episode", root / "full", CVConfig.load(), stride=3, search="full"
+            )
+            self.assertGreater(full["examined_frames"], result["examined_frames"])
+            self.assertEqual(full["decoded_frames"], 8)
+            with patch(
+                "vive_correct.cv_features.detect_label_candidates",
+                return_value={"candidates": {"left": []}},
+            ):
+                missing = scan_features(
+                    root / "episode",
+                    root / "missing",
+                    replace(CVConfig.load(), feature_fast_max_samples=2),
+                )
+            self.assertIsNone(missing["error"])
+            self.assertEqual(missing["status"], "partial")
+            self.assertEqual(set(missing["missing_hands"]), {"left", "right"})
+            self.assertTrue(Path(missing["human_review_file"]).is_file())
             review_path = root / "out/human_review.json"
             review = json.loads(review_path.read_text())
             self.assertEqual(len(review["observations"]), 2)
@@ -177,7 +196,6 @@ class FeatureTests(unittest.TestCase):
             scan_features(root / "episode", root / "out", CVConfig.load(), stride=3)
             self.assertEqual(json.loads(review_path.read_text())["reviewer"], "preserve-me")
 
-            from dataclasses import replace
             from vive_correct.cv_features import refilter_features
 
             refined = refilter_features(
@@ -229,7 +247,7 @@ class SamplingTests(unittest.TestCase):
     def test_time_boundary_and_fractional_frame_rate(self):
         from vive_correct.cv_features import feature_scan_phases
 
-        phases = feature_scan_phases(700, 29.97, 15, CVConfig.load())
+        phases = feature_scan_phases(700, 29.97, 15, CVConfig.load(), search="full")
         self.assertEqual(
             phases[0]["ranges"],
             [
@@ -243,7 +261,7 @@ class SamplingTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "invalid_video_fps"):
                 feature_scan_phases(700, fps, 15, CVConfig.load())
 
-    def test_missing_side_recovers_without_rechecking_frames(self):
+    def scan_empty_video(self, *, search="fast", config=None):
         class Capture:
             def __init__(self):
                 self.index = -1
@@ -269,9 +287,11 @@ class SamplingTests(unittest.TestCase):
                 pass
 
         called = []
+        clock = [0.0]
 
         def detector(image, *args, **kwargs):
             called.append(int(image[0, 0, 0]))
+            clock[0] += 0.1
             return {"candidates": {"left": []}}
 
         def finish(report, *args):
@@ -286,10 +306,45 @@ class SamplingTests(unittest.TestCase):
                 patch("vive_correct.cv_features.cv2.VideoCapture", return_value=Capture()),
                 patch("vive_correct.cv_features.detect_label_candidates", side_effect=detector),
                 patch("vive_correct.cv_features._finish_features", side_effect=finish),
+                patch("vive_correct.cv_features.time.perf_counter", side_effect=lambda: clock[0]),
             ):
-                result = scan_features(root, root / "out", CVConfig.load())
+                result = scan_features(root, root / "out", config or CVConfig.load(), search=search)
+        return result, called
+
+    def test_missing_side_recovers_without_rechecking_frames(self):
+        result, called = self.scan_empty_video(search="full")
         self.assertEqual(called[:6], [0, 5, 10, 15, 20, 35])
         self.assertEqual(called[6:8], [25, 30])
         self.assertEqual(len(called), 40)
         self.assertEqual(set(called), set(range(40)))
         self.assertEqual([p["examined_frames"] for p in result["scan_phases"]], [6, 2, 32])
+
+    def test_fast_scan_stops_at_sample_budget_and_preserves_manual_review(self):
+        result, called = self.scan_empty_video(
+            config=replace(CVConfig.load(), feature_fast_max_samples=6)
+        )
+        self.assertEqual(len(called), 6)
+        self.assertEqual(len(set(called)), 6)
+        self.assertGreaterEqual(max(called), 20)
+        self.assertEqual(result["stop_reason"], "sample_budget")
+        self.assertNotIn("full_recovery", [phase["name"] for phase in result["scan_phases"]])
+
+    def test_fast_scan_stops_at_time_budget(self):
+        result, called = self.scan_empty_video(
+            config=replace(CVConfig.load(), feature_fast_timeout_s=0.2)
+        )
+        self.assertEqual(len(called), 2)
+        self.assertEqual(result["stop_reason"], "time_budget")
+
+    def test_fast_schedule_reserves_samples_for_late_video(self):
+        from vive_correct.cv_features import feature_scan_phases
+
+        for limit, budget in ((10000, 120), (100, 2), (300, 4)):
+            cfg = replace(CVConfig.load(), feature_fast_max_samples=budget)
+            phases = feature_scan_phases(limit, 30, 15, cfg)
+            samples = [
+                i for r in phases[0]["ranges"] for i in range(r["start"], r["stop"], r["stride"])
+            ]
+            self.assertLessEqual(len(samples), budget)
+            self.assertGreaterEqual(max(samples), limit // 2)
+            self.assertEqual([p["name"] for p in phases], ["initial", "late_recovery"])

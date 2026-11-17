@@ -17,11 +17,13 @@
 
 纯 CV 只接受矫正左目；缺失或解码失败直接报错，不回退原始左目。
 
+`eye_rgb` 当前仅用于 RRD 视频与注视点展示。更换内参或 `--initial-mount` 不会切换输入相机；眼动相机全流程还需统一配置视频、时间戳、内参/畸变、到头部 Vive 的外参及可选配准深度。
+
 ## 配置档
 
 | Profile | 说明 |
 |---------|------|
-| `cv` | 纯 OpenCV：连续跟踪 + 特征选帧；不调模型 |
+| `cv` | 纯 OpenCV：默认快速选帧；可显式开启连续跟踪 |
 | `astra`（默认） | Codex CLI 调用 `gpt-6-astra` |
 | `legacy` | API（Qwen）；需 `openai.local.json` 或环境变量 |
 
@@ -40,7 +42,7 @@ python3 -m vive_correct run --help
 ```
 
 - `--episodes-file FILE`：JSON 样本清单，保持顺序
-- `--dry-run`：只预览计划（默认 `all` 阶段），不联网、不写结果
+- `--dry-run`：预览 `all` 或 `features` 计划，不联网、不写结果
 - `--profile cv` / `--model-review off`：纯 CV；详见 [纯 CV 指南](../docs/cv_detection.md)
 - `--fixed-candidates`：关闭补扫与提前停止（对比实验）
 - `--tracker-guided-frames N`：局部搜索帧数；`0` 关闭
@@ -60,11 +62,12 @@ python3 -m vive_correct run --help
 
 ## 阶段与产物
 
-模型路径默认 `--stage all`：估计 → 扫描 → 复核 → 安装检查 → 交付。纯 CV 的 `all` 为跟踪 + 特征 + 审核材料，不自动审核/修复/导出 Rerun。
+模型路径默认 `--stage all`：估计 → 扫描 → 复核 → 安装检查 → 交付。纯 CV 默认 `--stage features` 快速生成审核材料；显式 `--stage all` 才增加整段跟踪。`--feature-search full` 可恢复完整选帧补扫，所有 CV 检测阶段都不自动审核、修复或导出 Rerun。
 
 ```text
 <out>/
 ├── run_plan.json              # 参数、样本、输入签名、代码哈希
+├── feature_plan.json          # CV 选帧模式、预算配置与缓存绑定
 ├── estimates/                 # 初始估计 / CV 跟踪
 ├── features/                  # CV 特征图与审核模板
 ├── search/、search_refined/   # 粗扫与补扫（模型路径）

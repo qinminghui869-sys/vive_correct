@@ -10,7 +10,13 @@ import pyarrow.parquet as pq
 
 from vive_correct.batch.report_io import digest
 from vive_correct.dataset import TIMESTAMP_SUFFIX, VIDEO_SUFFIX, input_signature
-from vive_correct.estimate.geometry import VIDEO_KEY, Camera, estimate_pose, order_quad
+from vive_correct.estimate.geometry import (
+    VIDEO_KEY,
+    Camera,
+    ReprojectionError,
+    estimate_pose,
+    order_quad,
+)
 from vive_correct.review_io import atomic_json, output_lock, read_json
 
 SIDES = ("left", "right")
@@ -64,7 +70,7 @@ def decode_frame(episode, index):
         capture.release()
 
 
-def checked_pose(episode, choice):
+def checked_pose(episode, choice, *, side=None):
     image, _ = decode_frame(episode, choice.get("frame_index"))
     camera = Camera.load(Path(episode) / "calibrations/rectify_params.yaml")
     height, width = image.shape[:2]
@@ -76,7 +82,15 @@ def checked_pose(episode, choice):
     if np.any(quad < 0) or np.any(quad >= [width, height]):
         raise ValueError("标签四角超出原图范围")
     ordered = order_quad(quad)
-    pose = estimate_pose(ordered, camera, allow_origin_only=True)
+    try:
+        pose = estimate_pose(ordered, camera, allow_origin_only=True)
+    except ReprojectionError as error:
+        hand = {"left": "左手", "right": "右手"}.get(side, "标签")
+        raise ValueError(
+            f"{hand}第 {choice['frame_index']} 帧：重投影误差 {error.rms_px:.2f} px，"
+            f"超过 {error.limit_px:g} px 阈值。请展开四角调整，放大后将角点对齐白色标签的四角；"
+            "仍失败时重选更清晰、遮挡更少的帧。"
+        ) from error
     homogeneous = np.column_stack((ordered, np.ones(4)))
     center = np.cross(
         np.cross(homogeneous[0], homogeneous[2]), np.cross(homogeneous[1], homogeneous[3])
@@ -240,7 +254,7 @@ class ReviewStore:
                 if status == "accepted":
                     if not reviewer or item.get("physical_side") != side:
                         raise ValueError("通过前请填写审核人并确认物理左右手")
-                    checked_pose(Path(current["episode"]), item)
+                    checked_pose(Path(current["episode"]), item, side=side)
                 candidate = candidates.get(item.get("candidate_id"))
                 automatic = (
                     candidate is not None
@@ -328,7 +342,7 @@ class ReviewStore:
             choice = selected[side]
             if not choice.get("reviewer"):
                 raise ValueError("审核记录缺少审核人，请重新确认")
-            pose, camera = checked_pose(episode, choice)
+            pose, camera = checked_pose(episode, choice, side=side)
             frame = choice["frame_index"]
             if frame >= len(times) or not np.isfinite(times[frame]):
                 raise ValueError("参考帧缺少有效时间戳")
