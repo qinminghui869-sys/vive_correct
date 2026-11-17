@@ -143,7 +143,10 @@ def approve(store):
     state["reviewer"] = "synthetic-test"
     for side, item in state["selected"].items():
         item.update(status="accepted", physical_side=side)
-    return store.save(0, state)
+    from vive_correct.review_bundle import approve as approve_bundle
+
+    approve_bundle(store, 0, state, Path(store.load(0)["episode"]).parent / "mount.json")
+    return store.load(0)
 
 
 class ReviewTests(unittest.TestCase):
@@ -299,7 +302,7 @@ class ReviewTests(unittest.TestCase):
     def fake_render(self, command, **kwargs):
         pending = Path(command[command.index("--output") + 1])
         alignment = read_json(Path(command[command.index("--wrist-calibration") + 1]))
-        self.assertEqual(alignment["wrists"]["left"]["model"], "world")
+        self.assertEqual(alignment["wrists"]["left"]["model"], "wrist_local_rigid")
         pending.write_bytes(b"test-recording")
         atomic_json(
             pending.with_suffix(".json"),
@@ -323,13 +326,21 @@ class ReviewTests(unittest.TestCase):
             second = repair_dataset(self.output, self.mount)
         self.assertEqual(first["status"], "complete")
         self.assertEqual(second["status"], "complete")
-        self.assertNotEqual(first["run"], second["run"])
+        self.assertTrue(second["entries"][0]["reused"])
         alignment = read_json(first["entries"][0]["alignment"])
         for side in ("left", "right"):
             source = self.episode / DATA / f"observation.{side}_wrist_pose.parquet"
             self.assertEqual(source.read_bytes(), original[side])
-            a = pq.read_table(first["entries"][0]["corrected_files"][side]["path"])
-            b = pq.read_table(second["entries"][0]["corrected_files"][side]["path"])
+            a = pq.read_table(
+                first["entries"][0]["corrected_files"][f"observation.{side}_wrist_pose.parquet"][
+                    "path"
+                ]
+            )
+            b = pq.read_table(
+                second["entries"][0]["corrected_files"][f"observation.{side}_wrist_pose.parquet"][
+                    "path"
+                ]
+            )
             self.assertTrue(a.equals(b))
             raw = pq.read_table(source)
             for i, axis in enumerate("xyz"):
@@ -349,7 +360,7 @@ class ReviewTests(unittest.TestCase):
         ):
             result = repair_dataset(self.output, self.mount)
         self.assertEqual(result["entries"][0]["status"], "failed")
-        self.assertFalse(list(Path(result["run"]).rglob("recording.rrd")))
+        self.assertFalse(list(self.output.rglob("recording.rrd")))
         self.assertEqual(read_json(self.output / "batch/results/manifest.json")["entries"], [])
 
     def test_one_bad_episode_does_not_block_other_episodes(self):
@@ -362,7 +373,9 @@ class ReviewTests(unittest.TestCase):
             state["reviewer"] = "synthetic-test"
             for side, item in state["selected"].items():
                 item.update(status="accepted", physical_side=side)
-            store.save(index, state)
+            from vive_correct.review_bundle import approve as approve_bundle
+
+            approve_bundle(store, index, state, self.mount)
         # Tracking failure affects one episode, without changing its reviewed video.
         (self.episode / DATA / "observation.left_wrist_pose.parquet").unlink()
         with patch("vive_correct.rerun_export.subprocess.run", side_effect=self.fake_render):
@@ -379,7 +392,7 @@ class ReviewTests(unittest.TestCase):
         state["selected"]["left"]["status"] = "rejected"
         self.store.save(0, state)
         with patch("vive_correct.rerun_export.subprocess.run") as render:
-            self.assertEqual(export_recordings(Path(result["run"]), self.mount), 1)
+            self.assertEqual(export_recordings(Path(result["entries"][0]["run"]), self.mount), 1)
             render.assert_not_called()
 
     def test_cached_export_skips_renderer_and_invalidates_changed_inputs(self):
@@ -398,11 +411,15 @@ class ReviewTests(unittest.TestCase):
             self.assertEqual(render.call_count, 1)
             from vive_correct.viewer import recordings_at
 
-            self.assertEqual(recordings_at(second["run"]), [Path(first["entries"][0]["recording"])])
+            self.assertEqual(
+                recordings_at(second["entries"][0]["run"]), [Path(first["entries"][0]["recording"])]
+            )
             # A changed mount, tracking stream or damaged artifact must rebuild.
             mount = read_json(self.mount)
             mount["T_head_rectified_camera"][0][3] = 0.01
             atomic_json(self.mount, mount)
+            self.assertEqual(repair_dataset(self.output, self.mount)["status"], "incomplete")
+            approve(self.store)
             repair_dataset(self.output, self.mount)
             self.assertEqual(render.call_count, 2)
             source = self.episode / DATA / "observation.left_wrist_pose.parquet"
@@ -411,6 +428,8 @@ class ReviewTests(unittest.TestCase):
                 table.schema.get_field_index("x"), "x", pa.array(table["x"].to_numpy() + 0.01)
             )
             pq.write_table(table, source)
+            self.assertEqual(repair_dataset(self.output, self.mount)["status"], "incomplete")
+            approve(self.store)
             result = repair_dataset(self.output, self.mount)
             self.assertEqual(render.call_count, 3)
             Path(result["entries"][0]["recording"]).write_bytes(b"damaged")
@@ -419,6 +438,8 @@ class ReviewTests(unittest.TestCase):
             state = self.store.load(0)
             state["selected"]["left"]["quad"][0][0] += 1
             self.store.save(0, state)
+            self.assertEqual(repair_dataset(self.output, self.mount)["status"], "incomplete")
+            approve(self.store)
             repair_dataset(self.output, self.mount)
             self.assertEqual(render.call_count, 5)
 
@@ -434,7 +455,9 @@ class ReviewTests(unittest.TestCase):
             payload["reviewer"] = "test"
             for side, choice in payload["selected"].items():
                 choice.update(status="accepted", physical_side=side)
-            store.save(i, payload)
+            from vive_correct.review_bundle import approve as approve_bundle
+
+            approve_bundle(store, i, payload, self.mount)
         with patch("vive_correct.rerun_export.subprocess.run", side_effect=self.fake_render):
             repair_dataset(self.output, self.mount, indices=[1])
         original = read_json(self.output / "rerun/manifest.json")["entries"]

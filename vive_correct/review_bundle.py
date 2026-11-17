@@ -1,6 +1,8 @@
 """Approved evidence and six-file correction, independent of RRD rendering."""
 
 import uuid
+from time import perf_counter
+from vive_correct.task_locks import operation_lock
 from pathlib import Path
 
 import cv2
@@ -16,6 +18,7 @@ from vive_correct.human_review import (
 from vive_correct.parquet_correction import translate, verify_table
 from vive_correct.review_io import atomic_json, export_code_signature, output_lock, read_json
 from vive_correct.source_data import DATA, FILES, baseline_read, original_files
+from vive_correct.axis_calibration import enrich_pose
 
 
 def load_bundle(store, index, calibration):
@@ -50,6 +53,11 @@ def review_state(store, index, calibration):
 
 
 def approve(store, index, payload, calibration):
+    with operation_lock(store.path(index).parent):
+        return _approve(store, index, payload, calibration)
+
+
+def _approve(store, index, payload, calibration):
     try:
         state = store.save(index, payload)
     except ValueError:
@@ -86,6 +94,12 @@ def approve(store, index, payload, calibration):
         atomic_json(report_path, report)
         atomic_json(mount_path, read_json(calibration))
         alignment = build_alignment(episode, report_path, mount_path, refine_depth=True)
+        for observation in report["observations"]:
+            for side, pose in observation["stickers"].items():
+                sample = next(s for s in alignment["samples"] if s["side"] == side)
+                enrich_pose(pose, sample, report["camera"]["K"])
+        atomic_json(report_path, report)
+        alignment["source_report_sha256"] = digest(report_path)
         alignment_path = folder / "wrist_alignment.json"
         atomic_json(alignment_path, alignment)
         originals = original_files(episode)
@@ -108,6 +122,24 @@ def approve(store, index, payload, calibration):
                 cv2.putText(
                     image, f"q{i}", tuple(point), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (100, 240, 30), 2
                 )
+            pose = next(
+                o["stickers"][side] for o in report["observations"] if side in o["stickers"]
+            )
+            projection = pose["axis_projection"]
+            if projection["origin"] is not None:
+                origin = tuple(np.rint(projection["origin"]).astype(int))
+                for label, endpoint, color in zip(
+                    "XYZ", projection["endpoints"], [(0, 0, 255), (0, 200, 0), (255, 100, 0)]
+                ):
+                    if endpoint is None:
+                        continue
+                    end = tuple(np.rint(np.clip(endpoint, -1e7, 1e7)).astype(int))
+                    visible, start, end = cv2.clipLine(
+                        (0, 0, image.shape[1], image.shape[0]), origin, end
+                    )
+                    if visible:
+                        cv2.arrowedLine(image, start, end, color, 2, tipLength=0.15)
+                        cv2.putText(image, label, end, cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 1)
             if not cv2.imwrite(str(overlay), image):
                 raise ValueError("特征叠图保存失败")
             images[side] = dict(
@@ -141,6 +173,7 @@ def approve(store, index, payload, calibration):
 
 def stage_files(bundle):
     """Build once; both in-place rebuild and rendering consume these exact Parquets."""
+    started = perf_counter()
     folder = Path(bundle["directory"])
     cache = folder / "corrected_manifest.json"
     originals = original_files(Path(bundle["episode"]))
@@ -172,6 +205,7 @@ def stage_files(bundle):
         data_directory=str(destination),
         files=files,
         baseline_hashes=bundle["baseline_hashes"],
+        elapsed_s=round(perf_counter() - started, 3),
     )
     atomic_json(cache, result)
     return result

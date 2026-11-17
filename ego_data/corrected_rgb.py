@@ -8,6 +8,7 @@ import numpy as np
 import pyarrow.parquet as pq
 import rerun as rr
 import rerun.blueprint as rrb
+from scipy.spatial.transform import Rotation
 
 from ego_data.tracking_sync import resample_tracking
 from ego_data.vive_origin_alignment import pose_stream
@@ -39,10 +40,15 @@ def export_corrected_rgb(
     from vive_correct.source_data import original_path
 
     wrists, hands, offsets, corrected_wrists, original_hands = {}, {}, {}, {}, {}
+    corrected_rotations = {}
     for side in ("left", "right"):
         correction = alignment["wrists"][side]
         offset = np.asarray(correction["offset_m"], float)
-        if correction["model"] != "world" or offset.shape != (3,) or not np.isfinite(offset).all():
+        if (
+            (correction["model"] != "world" and not reviewed_data)
+            or offset.shape != (3,)
+            or not np.isfinite(offset).all()
+        ):
             raise ValueError("Expected finite fixed-world wrist offsets")
         offsets[side] = offset
         wrists[side] = resample_tracking(
@@ -53,13 +59,15 @@ def export_corrected_rgb(
             degrees=alignment["pose_degrees"],
         )[1][:, :3]
         if reviewed_data:
-            corrected_wrists[side] = resample_tracking(
+            corrected_poses = resample_tracking(
                 pose_stream(Path(reviewed_data) / f"observation.{side}_wrist_pose.parquet"),
                 times,
                 pose=True,
                 sequence=alignment["pose_euler_sequence"],
                 degrees=alignment["pose_degrees"],
-            )[1][:, :3]
+            )[1]
+            corrected_wrists[side] = corrected_poses[:, :3]
+            corrected_rotations[side] = corrected_poses[:, 3:]
             raw = pq.read_table(original_path(data / f"observation.hand_{side}_points.parquet"))
             raw_points = np.column_stack(
                 [raw[f"{j}_{a}"].to_numpy() for j in JOINTS for a in "xyz"]
@@ -82,7 +90,7 @@ def export_corrected_rgb(
     rr.log(
         "notes",
         rr.TextDocument(
-            "User-confirmed label side mapping. Corrected wrists: fixed world translation from label centres. "
+            "User-confirmed label side mapping. Corrected wrists use the saved calibration model. "
             "Not a calibrated VIVE internal origin or per-frame visual tracking. No depth cloud. "
             "RGB is rectified only. Gray: original; color: corrected.\n"
             + json.dumps(alignment, ensure_ascii=False)
@@ -125,6 +133,25 @@ def export_corrected_rgb(
                         rr.Points3D([point], colors=[140, 140, 140], radii=0.008),
                     )
                     rr.log(path + "/corrected", rr.Points3D([corrected], colors=color, radii=0.01))
+                    if (
+                        side in corrected_rotations
+                        and np.isfinite(corrected).all()
+                        and np.isfinite(corrected_rotations[side][index]).all()
+                    ):
+                        rotation = Rotation.from_euler(
+                            alignment["pose_euler_sequence"],
+                            corrected_rotations[side][index],
+                            degrees=alignment["pose_degrees"],
+                        ).as_matrix()
+                        rr.log(
+                            path + "/axes",
+                            rr.Arrows3D(
+                                origins=np.tile(corrected, (3, 1)),
+                                vectors=rotation.T * 0.04,
+                                colors=[[255, 0, 0], [0, 200, 0], [0, 100, 255]],
+                                labels=["X", "Y", "Z"],
+                            ),
+                        )
                     rr.log(
                         path + "/offset",
                         rr.LineStrips3D([[point, corrected]], colors=color, radii=0.001),

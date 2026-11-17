@@ -19,6 +19,11 @@ from vive_correct.estimate.geometry import (
 )
 from vive_correct.review_io import atomic_json, output_lock, read_json
 
+from vive_correct.axis_calibration import CONVENTION, axis_angles, prepare_pose
+from vive_correct.runtime_cache import cached_file
+from vive_correct.review_catalog import refresh_catalog
+from vive_correct.task_locks import operation_lock
+
 SIDES = ("left", "right")
 
 
@@ -51,6 +56,11 @@ def source_signature(episode):
 
 
 def decode_frame(episode, index):
+    video = Path(episode) / VIDEO_SUFFIX
+    return cached_file(("frame", index), video, lambda: _decode_frame(episode, index))
+
+
+def _decode_frame(episode, index):
     if type(index) is not int or index < 0:
         raise ValueError("帧号必须为从 0 开始的非负整数")
     video = Path(episode) / VIDEO_SUFFIX
@@ -72,7 +82,8 @@ def decode_frame(episode, index):
 
 def checked_pose(episode, choice, *, side=None):
     image, _ = decode_frame(episode, choice.get("frame_index"))
-    camera = Camera.load(Path(episode) / "calibrations/rectify_params.yaml")
+    camera_path = Path(episode) / "calibrations/rectify_params.yaml"
+    camera = cached_file("camera", camera_path, lambda: Camera.load(camera_path))
     height, width = image.shape[:2]
     if camera.resolution != (width, height):
         raise ValueError("视频分辨率与相机标定不一致")
@@ -104,31 +115,14 @@ def checked_pose(episode, choice, *, side=None):
 
 
 class ReviewStore:
-    def __init__(self, output):
+    def __init__(self, output, *, allow_empty=False):
         self.output = Path(output).resolve()
-        self.paths = sorted((self.output / "features").rglob("features.json"))
-        if not self.paths:
-            summary = self.output / "batch/delivery/features_summary.json"
-            if summary.is_file():
-                self.paths = [
-                    Path(r["human_review_file"]).resolve().parent / "features.json"
-                    for r in read_json(summary)["episodes"]
-                ]
-        if not self.paths:
-            raise ValueError(
-                f"在 {self.output} 未找到特征帧。请确认 --out 指向已有特征输出根目录；"
-                "若使用 $vive_out，请检查变量是否为空或路径错误。尚未生成特征时再运行 --stage features。"
-            )
-        for path in self.paths:
-            if not path.resolve().is_relative_to(self.output):
-                raise ValueError("特征文件必须位于输出目录内")
-            episode = Path(read_json(path)["episode"]).resolve()
-            if (
-                episode == self.output
-                or episode in self.output.parents
-                or self.output in episode.parents
-            ):
-                raise ValueError("审核输出目录必须与源数据分离")
+        self.paths, self.catalog_errors = refresh_catalog(self.output)
+        if not self.paths and not allow_empty:
+            raise ValueError(f"在 {self.output} 未找到特征帧。请确认 --out 指向已有特征输出根目录")
+
+    def refresh(self):
+        self.paths, self.catalog_errors = refresh_catalog(self.output)
 
     def path(self, index):
         if type(index) is not int or not 0 <= index < len(self.paths):
@@ -165,8 +159,8 @@ class ReviewStore:
         review_path = path.with_name("human_review.json")
         saved = read_json(review_path) if review_path.exists() else {}
         binding = self.binding(index)
-        stale = saved.get("schema_version") != 2 or saved.get("binding") != binding
-        selected = saved.get("selected", {}) if saved.get("schema_version") == 2 else {}
+        stale = saved.get("schema_version") != 3 or saved.get("binding") != binding
+        selected = saved.get("selected", {}) if saved.get("schema_version") in (2, 3) else {}
         legacy = {
             r.get("physical_side") if r.get("physical_side") in SIDES else r.get("image_side"): r
             for r in saved.get("observations", [])
@@ -187,6 +181,8 @@ class ReviewStore:
                     physical_side="unknown",
                 )
             )
+            choice.setdefault("axis_angles_deg", [0, 0, 0])
+            choice.setdefault("axis_convention", CONVENTION)
             if stale:
                 choice.update(status="pending", physical_side="unknown")
             choices[side] = choice
@@ -201,7 +197,7 @@ class ReviewStore:
         ]
         if ready:
             reason = ""
-        elif saved.get("schema_version") == 2 and stale:
+        elif saved.get("schema_version") in (2, 3) and stale:
             reason = "输入或特征报告已变化，请重新确认双手后导出"
         else:
             reason = "、".join(pending) + "尚未确认通过；请检查后点击「通过审核」（暂存不代表通过）"
@@ -220,7 +216,7 @@ class ReviewStore:
         )
 
     def save(self, index, payload):
-        with output_lock(self.path(index).parent):
+        with operation_lock(self.path(index).parent), output_lock(self.path(index).parent):
             current = self.load(index)
             if payload.get("revision") != current["revision"]:
                 raise ValueError("审核已被修改，请重新加载后操作")
@@ -240,6 +236,7 @@ class ReviewStore:
             result = {}
             for side in SIDES:
                 item = selected[side]
+                angles = axis_angles(item)
                 status = item.get("status")
                 if status not in ("pending", "accepted", "rejected"):
                     raise ValueError("未知审核状态")
@@ -263,6 +260,8 @@ class ReviewStore:
                 )
                 result[side] = dict(
                     frame_index=frame,
+                    axis_angles_deg=angles.tolist(),
+                    axis_convention=CONVENTION,
                     quad=quad.tolist(),
                     status=status,
                     physical_side=side if status == "accepted" else "unknown",
@@ -275,7 +274,7 @@ class ReviewStore:
                 )
             self.check_distinct(result)
             value = dict(
-                schema_version=2,
+                schema_version=3,
                 episode=current["episode"],
                 binding=current["binding"],
                 reviewer=reviewer,
@@ -343,6 +342,7 @@ class ReviewStore:
             if not choice.get("reviewer"):
                 raise ValueError("审核记录缺少审核人，请重新确认")
             pose, camera = checked_pose(episode, choice, side=side)
+            prepare_pose(pose, camera, choice)
             frame = choice["frame_index"]
             if frame >= len(times) or not np.isfinite(times[frame]):
                 raise ValueError("参考帧缺少有效时间戳")

@@ -16,6 +16,11 @@
     <main>
       <aside>
         <div class="aside-title">数据列表 <span id="progress"></span></div>
+        <p id="scan-progress" aria-live="polite"></p>
+        <details>
+          <summary>选帧异常</summary>
+          <pre id="scan-errors"></pre>
+        </details>
         <nav id="episodes"></nav>
       </aside>
       <section>
@@ -57,7 +62,7 @@
         </div>
         <p id="saved-state"></p>
         <details id="editor">
-          <summary>需要调整时展开：重选帧、修改四角或手侧</summary>
+          <summary>需要调整时展开：重选帧、修改四角、坐标轴或手侧</summary>
           <div class="toolbar">
             <label
               >物理手侧
@@ -95,6 +100,19 @@
             <button id="undo">撤销末点</button><button id="clear">清空四角</button>
             <span>沿标签边缘依次点击四角；拖动圆点修正。</span>
           </div>
+          <fieldset id="axis-controls">
+            <legend>坐标轴校准 · 本地内禀 XYZ · 红 X / 绿 Y / 蓝 Z</legend>
+            <p>原点为标签中心；初始方向来自源腕部。旋转和标签偏移将随腕部应用到整段及手部关节。</p>
+            <div id="axis-inputs"></div>
+            <button id="axis-from-corners" type="button">按四角校正方向</button>
+            <button id="axis-reset" type="button">恢复源方向</button>
+            <p>
+              四角校正按标签平面取 X 向左、Y 向上、Z
+              朝相机前方的右手系，并非自动识别设备朝向。应用后可微调；修改四角后需再次点击。
+            </p>
+            <p id="corner-axis-status" role="status"></p>
+            <p id="axis-status" role="status"></p>
+          </fieldset>
           <div class="viewer">
             <canvas id="frame-canvas" aria-label="原帧与可编辑四角"></canvas>
           </div>

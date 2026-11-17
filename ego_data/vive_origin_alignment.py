@@ -19,23 +19,34 @@ else:
 def pose_stream(path):
     from vive_correct.source_data import original_path
 
-    t = pq.read_table(original_path(path))
-    return t["timestamp"].to_numpy(), np.column_stack(
-        [t[n].to_numpy() for n in ("x", "y", "z", "roll", "pitch", "yaw")]
-    )
+    from vive_correct.runtime_cache import cached_file
+
+    source = original_path(path)
+
+    def read():
+        t = pq.read_table(source)
+        return t["timestamp"].to_numpy(), np.column_stack(
+            [t[n].to_numpy() for n in ("x", "y", "z", "roll", "pitch", "yaw")]
+        )
+
+    return cached_file("pose_stream", source, read)
 
 
 def build_alignment(
     episode, report_path, calibration_path, *, refine_depth=False, require_bilateral=True
 ):
-    report = json.loads(report_path.read_text())
+    from vive_correct.axis_calibration import local_rotation
+
+    report = report_path if isinstance(report_path, dict) else json.loads(report_path.read_text())
     calibration = json.loads(calibration_path.read_text())
     if Path(report["episode"]).resolve() != episode.resolve():
         raise ValueError("Origin report belongs to another episode")
     data = episode / "data/chunk-000/episode_000000"
+    needed = {side + "_wrist" for o in report["observations"] for side in o["stickers"]}
+    if not needed <= {"left_wrist", "right_wrist"}:
+        raise ValueError("Unknown hand side")
     streams = {
-        s: pose_stream(data / f"observation.{s}_pose.parquet")
-        for s in ("head", "left_wrist", "right_wrist")
+        s: pose_stream(data / f"observation.{s}_pose.parquet") for s in sorted({"head"} | needed)
     }
     video_times = pq.read_table(data / f"{report['video_key']}.parquet")["timestamp"].to_numpy()
     depth_path = data / "observation.images.depth_headband_left_rectified.parquet"
@@ -58,7 +69,9 @@ def build_alignment(
     if refine_depth:
         from ego_data.depth_targets import refine_targets
 
-        refinements = refine_targets(episode, report)
+        # Match single-frame browser previews even if another reference lacks depth.
+        for observation in report["observations"]:
+            refinements.update(refine_targets(episode, dict(report, observations=[observation])))
     samples = []
     for observation in report["observations"]:
         ts = observation["timestamp_s"]
@@ -107,6 +120,18 @@ def build_alignment(
                     depth_refinement=refinement,
                 )
             )
+            if "axis_angles_deg" in item:
+                rotation = wrist_matrix[:3, :3]
+                correction = local_rotation(item)
+                samples[-1].update(
+                    model="wrist_local_rigid",
+                    offset_local_m=(rotation.T @ (target - wrist[:3])).tolist(),
+                    rotation_local=correction.tolist(),
+                    rotation_camera_source=(camera[:3, :3].T @ rotation).tolist(),
+                    rotation_camera_corrected=(camera[:3, :3].T @ rotation @ correction).tolist(),
+                    head_pose_original=head.tolist(),
+                    T_world_camera=camera.tolist(),
+                )
     wrists = {}
     for side in ("left", "right"):
         selected = [s for s in samples if s["side"] == side]
@@ -122,6 +147,14 @@ def build_alignment(
             sample_count=len(selected),
             residuals_m=residuals,
         )
+        if selected[0].get("model") == "wrist_local_rigid":
+            if len(selected) != 1:
+                raise ValueError("刚性标签校准每侧需要一个参考帧")
+            wrists[side].update(
+                model="wrist_local_rigid",
+                offset_local_m=selected[0]["offset_local_m"],
+                rotation_local=selected[0]["rotation_local"],
+            )
     if not wrists:
         raise ValueError("No repaired wrist origins")
     return dict(
@@ -133,10 +166,19 @@ def build_alignment(
         world_axes="LUF",
         pose_euler_sequence=sequence,
         pose_degrees=degrees,
-        source_report=str(report_path.resolve()),
-        source_report_sha256=hashlib.sha256(report_path.read_bytes()).hexdigest(),
+        source_report=None if isinstance(report_path, dict) else str(report_path.resolve()),
+        source_report_sha256=hashlib.sha256(
+            json.dumps(report, sort_keys=True).encode()
+            if isinstance(report_path, dict)
+            else report_path.read_bytes()
+        ).hexdigest(),
         synchronization="linear positions + rotation SLERP; bracket gap <= 50 ms; no extrapolation",
-        status="Label-center preview; fixed world translation applied to entire episode; not a calibrated Vive internal origin or per-frame visual repair",
+        status=(
+            "Label rigidly bound to source wrist; reviewed local rotation applied to wrists and hands. "
+            if any(w["model"] == "wrist_local_rigid" for w in wrists.values())
+            else "Fixed world translation. "
+        )
+        + "Label center is not a calibrated Vive internal origin or per-frame visual repair",
         samples=samples,
         wrists=wrists,
     )

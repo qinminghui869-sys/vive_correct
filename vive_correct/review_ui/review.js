@@ -11,6 +11,9 @@ const statuses = {
   prepared: "准备完成",
   complete: "导出完成",
   failed: "失败",
+  interrupted: "已中断，可重试",
+  scanning: "选帧中",
+  waiting: "等待选帧",
   stale: "已过期",
   queued: "排队中",
   validating: "校验审核中",
@@ -26,7 +29,9 @@ let current = null,
 let frameRequest = 0,
   dragging = -1,
   saving = false;
-let episodeRequest = 0;
+let episodeRequest = 0,
+  listRequest = 0,
+  listVersion = null;
 let jobs = new Map(),
   episodeRows = [];
 const submittedDrafts = new Map();
@@ -35,18 +40,129 @@ function currentBusy() {
 }
 const previews = { left: null, right: null };
 const previewKeys = { left: null, right: null };
+const axes = { left: null, right: null };
+const axisTimers = { left: null, right: null };
+const axisTickets = { left: 0, right: 0 };
+const axisControllers = { left: null, right: null };
+function axisKey(s) {
+  const c = current.selected[s];
+  return JSON.stringify([current.id, s, c.frame_index, c.quad, c.axis_angles_deg || [0, 0, 0]]);
+}
+function projection(s) {
+  return axes[s]?.key === axisKey(s) ? axes[s].data?.axis_projection : null;
+}
+function refreshAxes(s) {
+  clearTimeout(axisTimers[s]);
+  axisControllers[s]?.abort();
+  const ticket = ++axisTickets[s],
+    key = axisKey(s),
+    id = current.id;
+  axes[s] = { key, error: "正在计算坐标轴…" };
+  updateStatus();
+  axisTimers[s] = setTimeout(async () => {
+    try {
+      const c = current.selected[s];
+      if (axisKey(s) !== key) return;
+      const controller = (axisControllers[s] = new AbortController());
+      const data = await api(
+        `/api/axis-preview?id=${id}`,
+        {
+          side: s,
+          frame_index: c.frame_index,
+          quad: c.quad,
+          axis_angles_deg: c.axis_angles_deg || [0, 0, 0],
+          axis_convention: "intrinsic_XYZ_degrees",
+        },
+        controller.signal,
+      );
+      if (axisTickets[s] !== ticket || axisKey(s) !== key) return;
+      axes[s] = { key, data };
+    } catch (error) {
+      if (error.name === "AbortError") return;
+      if (axisTickets[s] !== ticket || axisKey(s) !== key) return;
+      axes[s] = { key, error: error.message };
+    }
+    drawOverview(s);
+    if (s === side) draw();
+    updateStatus();
+  }, 180);
+}
+function showAngles() {
+  const angles = choice().axis_angles_deg || [0, 0, 0];
+  angles.forEach((v, i) => {
+    $("axis-angle-" + i).value = v;
+    $("axis-slider-" + i).value = v;
+  });
+}
+function setAngle(i, value) {
+  if (!current || saving || currentBusy() || !Number.isFinite(value)) return;
+  choice().axis_angles_deg ||= [0, 0, 0];
+  choice().axis_angles_deg[i] = ((((value + 180) % 360) + 360) % 360) - 180;
+  markEdited();
+  showAngles();
+  draw();
+}
+for (const [i, label] of [..."XYZ"].entries()) {
+  const row = document.createElement("div");
+  row.className = "toolbar";
+  const name = document.createElement("label");
+  name.textContent = label + "（度） ";
+  const number = document.createElement("input");
+  number.type = "number";
+  number.step = "0.1";
+  number.id = "axis-angle-" + i;
+  number.oninput = () => {
+    if (number.value !== "") setAngle(i, Number(number.value));
+  };
+  name.append(number);
+  row.append(name);
+  const slider = document.createElement("input");
+  slider.type = "range";
+  slider.min = -180;
+  slider.max = 180;
+  slider.step = 0.1;
+  slider.id = "axis-slider-" + i;
+  slider.setAttribute("aria-label", label + " 旋转角度");
+  slider.oninput = () => setAngle(i, Number(slider.value));
+  row.append(slider);
+  for (const delta of [-90, 90]) {
+    const button = document.createElement("button");
+    button.textContent = `${label} ${delta > 0 ? "+" : ""}${delta}°`;
+    button.onclick = () => setAngle(i, (choice().axis_angles_deg?.[i] || 0) + delta);
+    row.append(button);
+  }
+  $("axis-inputs").append(row);
+}
+$("axis-reset").onclick = () => {
+  if (!current || saving || currentBusy()) return;
+  choice().axis_angles_deg = [0, 0, 0];
+  markEdited();
+  showAngles();
+  draw();
+};
+$("axis-from-corners").onclick = () => {
+  if (!current || loading || saving || currentBusy()) return;
+  const proposal = axes[side]?.key === axisKey(side) && axes[side].data?.corner_correction;
+  if (!proposal) return;
+  choice().axis_angles_deg = [...proposal.axis_angles_deg];
+  markEdited();
+  showAngles();
+  draw();
+  message("已按四角校正方向，请核对 XYZ 轴后暂存或通过审核。");
+};
 const canvas = $("frame-canvas"),
   ctx = canvas.getContext("2d");
 function message(text, error = false) {
   $("message").textContent = text;
   $("message").className = error ? "error" : "";
 }
-async function api(url, body) {
+async function api(url, body, signal) {
   const response = await fetch(
     url,
     body === undefined
-      ? {}
+      ? { signal }
       : {
+          signal,
           method: "POST",
           headers: { "Content-Type": "application/json", "X-Review-Token": token },
           body: JSON.stringify(body),
@@ -64,11 +180,39 @@ function markEdited() {
   choice().status = "pending";
   choice().physical_side = "unknown";
   choice().source = "manual";
+  refreshAxes(side);
   updateStatus();
   drawOverview(side);
 }
 function updateStatus() {
-  if (!current) return;
+  const controls = document.querySelectorAll("section button, section input, section select");
+  if (!current) {
+    for (const control of controls) {
+      control.disabled = true;
+      control.dataset.waiting = "true";
+    }
+    $("episode-title").textContent = "等待选帧结果";
+    $("hint").textContent = "可在另一个终端运行选帧，使用同一输出目录。每条完成后会自动加入列表。";
+    return;
+  }
+  for (const control of controls) {
+    if (control.dataset.waiting) {
+      control.disabled = false;
+      delete control.dataset.waiting;
+    }
+  }
+  $("axis-controls").disabled = loading || currentBusy() || saving;
+  const cornerPose = axes[side]?.key === axisKey(side) ? axes[side].data : null;
+  $("axis-from-corners").disabled = !cornerPose?.corner_correction;
+  $("corner-axis-status").textContent = cornerPose?.corner_correction_error
+    ? "四角方向不可用：" + cornerPose.corner_correction_error
+    : cornerPose?.corner_correction?.plane_ambiguous
+      ? "标签平面存在多解，请核对方向，必要时换用更清晰的参考帧。"
+      : "";
+  $("axis-status").textContent =
+    axes[side]?.key === axisKey(side)
+      ? axes[side].error || "坐标轴已更新 · 轴长 4 cm"
+      : "坐标轴待计算";
   $("hint").textContent = currentBusy()
     ? "本条数据正在后台处理，可切换到其他数据继续审核。"
     : current.video_error ||
@@ -89,7 +233,9 @@ function updateStatus() {
       previews[s] &&
       current.selected[s].quad?.length === 4,
   );
-  $("approve").disabled = loading || currentBusy() || saving || !hasPreviews;
+  const hasAxes = ["left", "right"].every((s) => Boolean(projection(s)));
+  $("approve").disabled = loading || currentBusy() || saving || !hasPreviews || !hasAxes;
+  $("accept").disabled ||= !projection(side);
   $("approve").textContent = currentBusy()
     ? statuses[jobs.get(current.id).status] || "后台处理中"
     : "通过审核";
@@ -111,10 +257,13 @@ function updateStatus() {
   ])
     $(id).disabled = currentBusy() || saving;
   for (const s of ["left", "right"])
-    $("overview-" + s + "-status").textContent = statuses[current.selected[s].status];
+    $("overview-" + s + "-status").textContent =
+      statuses[current.selected[s].status] + (axes[s]?.error ? " · " + axes[s].error : "");
 }
 async function listEpisodes() {
+  const ticket = ++listRequest;
   const rows = await api("/api/episodes");
+  if (ticket !== listRequest) return episodeRows;
   episodeRows = rows;
   $("episodes").replaceChildren();
   rows.forEach((row) => {
@@ -122,6 +271,8 @@ async function listEpisodes() {
     button.dataset.episodeId = row.id;
     button.textContent = episodeLabel(row);
     if (current && current.id === row.id) button.className = "active";
+    button.disabled = Boolean(row.unavailable);
+    button.title = row.error || "";
     button.onclick = () => guard(() => openEpisode(row.id));
     $("episodes").append(button);
   });
@@ -181,6 +332,7 @@ async function openEpisode(id) {
   );
   $("editor").open = false;
   for (const s of ["left", "right"]) {
+    refreshAxes(s);
     previews[s]?.close();
     previews[s] = null;
     previewKeys[s] = null;
@@ -232,17 +384,32 @@ function drawOverview(s) {
   cc.clearRect(0, 0, crop.width, crop.height);
   $("overview-" + s + "-frame").textContent =
     `帧 ${selected.frame_index} · ${selected.quad?.length === 4 ? "四角已标注" : "需要补标四角"}`;
+  const candidate = current.candidates?.find(
+    (c) => c.candidate_id === selected.candidate_id && c.frame_index === selected.frame_index,
+  );
+  if (candidate?.review_reasons?.includes("body_extent_unresolved"))
+    $("overview-" + s + "-frame").textContent += " · 外壳范围不确定，请核对设备身份与四角";
   if (!image || previewKeys[s] !== `${current.id}:${selected.frame_index}`) return;
   full.width = image.width;
   full.height = image.height;
   fc.drawImage(image, 0, 0);
   paint(fc, selected.quad, full.width / Math.max(1, full.getBoundingClientRect().width));
-  drawCrop(cc, crop, image, selected.quad);
+  paintAxes(fc, projection(s), full.width / Math.max(1, full.getBoundingClientRect().width));
+  drawCrop(cc, crop, image, selected.quad, true, projection(s));
 }
-function drawCrop(context, target, image, points, overlay = true) {
+function drawCrop(context, target, image, points, overlay = true, axesProjection = null) {
   if (!points.length) return;
-  const xs = points.map((p) => p[0]),
-    ys = points.map((p) => p[1]);
+  const bounds = [
+    ...points,
+    ...(axesProjection?.endpoints || [])
+      .filter(Boolean)
+      .map(([x, y]) => [
+        Math.max(0, Math.min(image.width, x)),
+        Math.max(0, Math.min(image.height, y)),
+      ]),
+  ];
+  const xs = bounds.map((p) => p[0]),
+    ys = bounds.map((p) => p[1]);
   const x = Math.max(0, Math.min(...xs) - 30),
     y = Math.max(0, Math.min(...ys) - 30);
   const w = Math.min(image.width - x, Math.max(...xs) - x + 30),
@@ -257,6 +424,13 @@ function drawCrop(context, target, image, points, overlay = true) {
       context,
       points.map((p) => [(p[0] - x) * scale + ox, (p[1] - y) * scale + oy]),
     );
+  if (overlay && axesProjection) {
+    const convert = (p) => p && [(p[0] - x) * scale + ox, (p[1] - y) * scale + oy];
+    paintAxes(context, {
+      origin: convert(axesProjection.origin),
+      endpoints: axesProjection.endpoints.map(convert),
+    });
+  }
 }
 async function editSide(s) {
   side = s;
@@ -266,6 +440,8 @@ async function editSide(s) {
   $("editor").scrollIntoView({ block: "start" });
 }
 async function showChoice() {
+  showAngles();
+  refreshAxes(side);
   $("frame").value = $("timeline").value = choice().frame_index;
   $("notes").value = choice().notes || "";
   $("candidate").value = choice().candidate_id || "";
@@ -326,6 +502,29 @@ function paint(context, points, scale = 1) {
     context.fillText(`q${i}`, x + 8 * scale, y - 8 * scale);
   });
 }
+function paintAxes(context, axesProjection, scale = 1) {
+  if (!axesProjection?.origin) return;
+  const [x, y] = axesProjection.origin;
+  axesProjection.endpoints.forEach((end, i) => {
+    if (!end) return;
+    context.strokeStyle = context.fillStyle = ["#ff4040", "#24d35b", "#408cff"][i];
+    context.lineWidth = 2.5 * scale;
+    context.beginPath();
+    context.moveTo(x, y);
+    context.lineTo(...end);
+    context.stroke();
+    const angle = Math.atan2(end[1] - y, end[0] - x),
+      size = 8 * scale;
+    context.beginPath();
+    context.moveTo(...end);
+    context.lineTo(end[0] - size * Math.cos(angle - 0.4), end[1] - size * Math.sin(angle - 0.4));
+    context.lineTo(end[0] - size * Math.cos(angle + 0.4), end[1] - size * Math.sin(angle + 0.4));
+    context.closePath();
+    context.fill();
+    context.font = `bold ${14 * scale}px sans-serif`;
+    context.fillText("XYZ"[i], end[0] + 5 * scale, end[1] - 5 * scale);
+  });
+}
 function resizeCanvas() {
   const width = Math.min(
     canvas.parentElement.clientWidth,
@@ -346,10 +545,16 @@ function draw() {
   const points = choice().quad || [];
   if ($("overlay").checked)
     paint(ctx, points, canvas.width / Math.max(1, canvas.getBoundingClientRect().width));
+  if ($("overlay").checked)
+    paintAxes(
+      ctx,
+      projection(side),
+      canvas.width / Math.max(1, canvas.getBoundingClientRect().width),
+    );
   $("coordinates").textContent = points.length
     ? points.map(([x, y], i) => `q${i} (${x.toFixed(1)}, ${y.toFixed(1)})`).join(" · ")
     : "尚未标注四角";
-  drawCrop(cc, crop, bitmap, points, $("overlay").checked);
+  drawCrop(cc, crop, bitmap, points, $("overlay").checked, projection(side));
 }
 function point(event) {
   const rect = canvas.getBoundingClientRect();
@@ -383,6 +588,7 @@ canvas.onpointerdown = (event) => {
 canvas.onpointermove = (event) => {
   if (dragging >= 0 && !loading && !saving && !currentBusy()) {
     choice().quad[dragging] = point(event);
+    refreshAxes(side);
     draw();
   }
 };
@@ -483,6 +689,9 @@ $("clear").onclick = () => {
 };
 $("swap").onclick = () =>
   guard(async () => {
+    const rotations = Object.fromEntries(
+      ["left", "right"].map((s) => [s, current.selected[s].axis_angles_deg || [0, 0, 0]]),
+    );
     [current.selected.left, current.selected.right] = [
       current.selected.right,
       current.selected.left,
@@ -491,6 +700,10 @@ $("swap").onclick = () =>
       c.status = "pending";
       c.physical_side = "unknown";
     });
+    for (const s of ["left", "right"]) {
+      current.selected[s].axis_angles_deg = rotations[s];
+      refreshAxes(s);
+    }
     dirty = true;
     await Promise.all([loadPreview("left"), loadPreview("right")]);
     await showChoice();
@@ -543,6 +756,21 @@ async function poll() {
   try {
     const previousJobs = jobs;
     const state = await api("/api/status");
+    const nextVersion = JSON.stringify(state.list_version);
+    if (nextVersion !== listVersion) {
+      await listEpisodes();
+      listVersion = nextVersion;
+    }
+    const scan = state.scan || { entries: [], total: 0, status: "waiting" };
+    const counts = {};
+    for (const row of scan.entries) counts[row.status] = (counts[row.status] || 0) + 1;
+    $("scan-progress").textContent = scan.total
+      ? `选帧 ${counts.complete || 0}/${scan.total} 完成 · ${counts.scanning || 0} 扫描中 · ${counts.queued || 0} 等待 · ${(counts.failed || 0) + (counts.interrupted || 0)} 失败或中断`
+      : "等待选帧结果；也可加载已完成的输出目录。";
+    $("scan-errors").textContent = [
+      ...scan.entries.filter((r) => r.error).map((r) => `${r.episode}：${r.error}`),
+      ...(state.discovery_errors || []).map((r) => `${r.path}：${r.error}`),
+    ].join("\n");
     jobs = new Map((state.jobs || []).map((j) => [j.index, j]));
     for (const job of jobs.values()) {
       if (
@@ -597,7 +825,7 @@ async function poll() {
     for (const job of jobs.values()) {
       const episode =
         job.episode || episodeRows.find((r) => r.id === job.index)?.episode || String(job.index);
-      if (job.running || job.status === "failed" || job.status === "approved")
+      if (job.running || ["failed", "interrupted", "approved"].includes(job.status))
         rows.set(episode, { ...job, episode });
     }
     for (const row of rows.values()) {
@@ -619,7 +847,9 @@ window.addEventListener("beforeunload", (event) => {
 window.addEventListener("resize", resizeCanvas);
 guard(async () => {
   const rows = await listEpisodes();
-  if (rows.length) await openEpisode(rows[0].id);
+  const first = rows.find((r) => !r.unavailable);
+  if (first) await openEpisode(first.id);
+  else updateStatus();
   await poll();
   message("检查左右参考图，点击「通过审核」保存依据；需要时单独导出 RRD。");
 });

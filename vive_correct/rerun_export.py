@@ -77,8 +77,8 @@ def export_recordings(work, calibration, *, open_viewer=False):
                 hands, hand_status = (
                     None,
                     {
-                        "status": "reviewed_source_translated",
-                        "note": "Original hand joints and side mapping retained; fixed world translation only",
+                        "status": "reviewed_source_calibrated",
+                        "note": "Source hand shape and side mapping retained; saved wrist calibration applied once",
                     },
                 )
             else:

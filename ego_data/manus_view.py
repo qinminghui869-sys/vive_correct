@@ -10,8 +10,10 @@ import rerun as rr
 import rerun.blueprint as rrb
 
 try:
+    from .depth_metadata import metadata_path
     from .tracking_sync import normalize_tracking, sample_nearest
 except ImportError:
+    from depth_metadata import metadata_path
     from tracking_sync import normalize_tracking, sample_nearest
 
 RGB_KEYS = tuple(
@@ -124,8 +126,12 @@ def depth_available(episode):
     episode = Path(episode)
     key = "observation.images.depth_headband_left_rectified"
     ann = episode / "annotation/chunk-000" / key / "episode_000000"
+    try:
+        meta = metadata_path(ann)
+    except FileNotFoundError:
+        return False
     required = [
-        ann / "episode_000000_meta.json",
+        meta,
         ann / "valid_mask_ffv1.mkv",
         episode / "videos/chunk-000" / key / "episode_000000.mp4",
         episode

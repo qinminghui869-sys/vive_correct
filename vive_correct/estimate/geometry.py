@@ -167,7 +167,7 @@ def _axes_within_limits(angles):
     )
 
 
-def local_basis(R, t, camera):
+def local_basis(R, t, camera, *, require_direction_limits=True):
     """Choose a right-handed left/up/forward reference without moving the origin."""
     facing = np.diag([1.0, -1, -1]) if R[:, 2] @ t > 0 else np.eye(3)
     candidates = []
@@ -182,7 +182,7 @@ def local_basis(R, t, camera):
             final = facing @ reference @ REFERENCE_FROM_LOCAL
             rotation = R @ final
             angles = final_axis_angles(rotation, t, camera)
-            if not _axes_within_limits(angles):
+            if None in angles or (require_direction_limits and not _axes_within_limits(angles)):
                 continue
             x_deg, y_deg, z_deg = angles
             score = (
@@ -214,6 +214,7 @@ def estimate_pose(
             raise ValueError("Label axes exceed the configured direction limits")
         best = candidates[0]
         return {
+            "rotation_camera_label": best["R"].tolist(),
             "T_camera_local": None,
             "origin_camera_m": best["t"].tolist(),
             "local_axes_convention": "unresolved",

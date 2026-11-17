@@ -1,10 +1,14 @@
 """Validate detected label centers against registered depth, without changing detection."""
 
-import json
 import av
 import cv2
 import numpy as np
 import pyarrow.parquet as pq
+
+try:
+    from .depth_metadata import load_metadata
+except ImportError:
+    from depth_metadata import load_metadata
 
 DEPTH_KEY = "observation.images.depth_headband_left_rectified"
 
@@ -78,7 +82,7 @@ def refine_targets(episode, report):
     result = {}
     observations = report["observations"]
     try:
-        meta = json.loads((ann / "episode_000000_meta.json").read_text())
+        meta = load_metadata(ann)
         k = meta["intrinsics"]["left"]
         expected = np.array([[k["fx"], 0, k["cx"]], [0, k["fy"], k["cy"]], [0, 0, 1]])
         if not np.allclose(report["camera"]["K"], expected, atol=1e-4):

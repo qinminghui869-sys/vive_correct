@@ -46,6 +46,17 @@ class ContextTests(unittest.TestCase):
         self.assertGreaterEqual(result["nearby_white_components"], 4)
         self.assertFalse(result["compact_body"])
 
+    def test_white_background_objects_are_not_counted_as_keys_on_device(self):
+        from vive_correct.estimate.label_detection import tracker_body_metrics
+
+        image, quads = fixture()
+        for x in (30, 75, 220, 270):
+            for y in (180, 220, 370):
+                cv2.rectangle(image, (x, y), (x + 20, y + 15), (230, 230, 230), -1)
+        result = tracker_body_metrics(image, quads[0])
+        self.assertEqual(result["nearby_white_components"], 0)
+        self.assertTrue(result["compact_body"])
+
     def test_one_sided_black_strip_does_not_enclose_label(self):
         image, quads = fixture()
         image[:] = 180
@@ -84,11 +95,46 @@ class ContextTests(unittest.TestCase):
         for item in json.loads((root / "cases.json").read_text()):
             with self.subTest(name=item["name"]):
                 result = label_metrics(cv2.imread(str(root / item["image"])), item["quad"])
-                from vive_correct.cv_features import feature_candidate_allowed
+                from vive_correct.cv_features import (
+                    feature_candidate_allowed,
+                    feature_rejection_reason,
+                )
 
                 self.assertFalse(
                     feature_candidate_allowed(dict(result, quad=item["quad"]), CVConfig.load())
                 )
+                self.assertIsNotNone(
+                    feature_rejection_reason(
+                        dict(result, quad=item["quad"]),
+                        CVConfig.load(),
+                        allow_truncated_body=True,
+                    )
+                )
+
+    def test_truncated_body_is_reviewable_only_with_all_label_gates(self):
+        from vive_correct.cv_features import feature_rejection_reason
+
+        image, quads = fixture()
+        candidate = dict(
+            label_metrics(image, quads[0]), quad=quads[0], compact_body=False, body_context_edges=3
+        )
+        config = CVConfig.load()
+        self.assertEqual(feature_rejection_reason(candidate, config), "noncompact_body")
+        self.assertIsNone(feature_rejection_reason(candidate, config, allow_truncated_body=True))
+        for change in (
+            dict(body_context_edges=0),
+            dict(label_black_fraction=0.5),
+            dict(box_supported=False),
+            dict(nearby_white_components=5),
+            dict(accepted=False),
+        ):
+            self.assertIsNotNone(
+                feature_rejection_reason(
+                    dict(candidate, **change),
+                    config,
+                    allow_truncated_body=True,
+                )
+            )
 
     def test_feature_gate_rejects_acute_reflection_without_requiring_fixed_aspect(self):
         from vive_correct.cv_features import feature_candidate_allowed
@@ -211,6 +257,38 @@ class FeatureTests(unittest.TestCase):
                     root / "out", root / "bad", replace(CVConfig.load(), box_min_black=0.9)
                 )
 
+    def test_body_connected_to_glove_stays_review_only_through_scan_and_refilter(self):
+        from vive_correct.cv_features import refilter_features
+
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            video = root / "episode" / VIDEO_SUFFIX
+            video.parent.mkdir(parents=True)
+            image, _ = fixture()
+            # Black gloves join both device silhouettes to the bottom of the frame.
+            for cx in (150, 490):
+                cv2.rectangle(image, (cx - 50, 340), (cx + 50, 399), (25, 25, 25), -1)
+            writer = cv2.VideoWriter(str(video), cv2.VideoWriter_fourcc(*"mp4v"), 30, (640, 400))
+            self.assertTrue(writer.isOpened())
+            for _ in range(8):
+                writer.write(image)
+            writer.release()
+            config = replace(CVConfig.load(), feature_fast_max_samples=2)
+            result = scan_features(root / "episode", root / "out", config)
+            self.assertEqual(set(result["features"]), {"left", "right"})
+            self.assertEqual(result["stop_reason"], "sample_budget")
+            self.assertFalse(result["human_verified"])
+            for candidate in result["features"].values():
+                self.assertEqual(candidate["status"], "review_candidate")
+                self.assertIn("body_extent_unresolved", candidate["review_reasons"])
+            review = json.loads((root / "out/human_review.json").read_text())
+            self.assertTrue(all(item["status"] == "pending" for item in review["observations"]))
+            refined = refilter_features(root / "out", root / "refined", config)
+            self.assertEqual(set(refined["features"]), {"left", "right"})
+            self.assertTrue(
+                all(c["status"] == "review_candidate" for c in refined["features"].values())
+            )
+
     def test_corrupt_rectified_video_does_not_fall_back(self):
         with TemporaryDirectory() as directory:
             root = Path(directory)
@@ -270,10 +348,12 @@ class SamplingTests(unittest.TestCase):
                 return True
 
             def get(self, prop):
+                if prop == cv2.CAP_PROP_POS_FRAMES:
+                    return self.index + 1
                 return 40 if prop == cv2.CAP_PROP_FRAME_COUNT else 2.0
 
             def set(self, prop, value):
-                self.index = -1
+                self.index = int(value) - 1
                 return True
 
             def grab(self):
@@ -335,6 +415,18 @@ class SamplingTests(unittest.TestCase):
         )
         self.assertEqual(len(called), 2)
         self.assertEqual(result["stop_reason"], "time_budget")
+        self.assertGreaterEqual(max(called), 35)
+        self.assertEqual(result["sampled_frame_indices"], called)
+
+    def test_progressive_schedule_covers_timeline_before_densifying(self):
+        from vive_correct.cv_features import progressive_samples, feature_scan_phases
+
+        phase = feature_scan_phases(1800, 30, 15, CVConfig.load())[0]
+        sampled = list(progressive_samples(phase["ranges"]))
+        expected = {i for r in phase["ranges"] for i in range(r["start"], r["stop"], r["stride"])}
+        self.assertEqual(set(sampled), expected)
+        self.assertEqual(len(sampled), len(expected))
+        self.assertEqual({min(i // 450, 3) for i in sampled[:5]}, {0, 1, 2, 3})
 
     def test_fast_schedule_reserves_samples_for_late_video(self):
         from vive_correct.cv_features import feature_scan_phases

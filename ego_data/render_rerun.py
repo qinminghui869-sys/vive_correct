@@ -15,6 +15,7 @@ from hand_calibration import apply_mount, rigid_matrix
 from cloud_visibility import local_hand_cloud_mask
 from tracking_sync import resample_tracking, normalize_tracking, sample_nearest
 from manus_view import log_nodes
+from depth_metadata import load_metadata
 
 ROOT = Path(__file__).resolve().parent
 sys.path.insert(0, str(ROOT.parent))
@@ -133,7 +134,7 @@ def main():
     ap.add_argument(
         "--show-uncorrected-hands",
         action="store_true",
-        help="Compare source hand skeletons (gray) against translated preview",
+        help="Compare source hand skeletons (gray) against corrected hands",
     )
     ap.add_argument(
         "--show-labels", action="store_true", help="Show 3D text labels (hidden by default)"
@@ -278,7 +279,7 @@ def main():
             status=fallback_status,
         )
         return
-    meta = json.loads((ann / "episode_000000_meta.json").read_text())
+    meta = load_metadata(ann)
     k = meta["intrinsics"]["left"]
     with av.open(str(video / key / "episode_000000.mp4")) as container:
         width, height = container.streams.video[0].width, container.streams.video[0].height
@@ -422,7 +423,7 @@ def main():
     if calibration.get("assumptions"):
         status += "\nCamera mounting is approximate, not independently calibrated."
     status = (
-        "Hand skeleton: translation preview only; orientation and wrist mounting are NOT corrected.\n"
+        "Hand skeleton follows the saved wrist calibration; physical mounting remains unverified.\n"
         "Cyan: left; pink: right; gray: source (when comparison is enabled).\n" + status
     )
     status += "\n" + (
@@ -464,7 +465,7 @@ def main():
     status += f"\nHead and wrist markers: {args.pose_markers}; local axis length {args.pose_axis_length}m. Moving camera frustum depth {args.frustum_depth}m; wireframe only."
     if hand_calibration:
         status = status.replace(
-            "Hand skeleton: translation preview only; orientation and wrist mounting are NOT corrected.",
+            "Hand skeleton follows the saved wrist calibration; physical mounting remains unverified.",
             "Hand skeleton: validated rigid mount correction on configured sides; other sides remain previews.",
         )
         status += "\nValidated tracker-local rigid hand correction applied to: " + ", ".join(
@@ -763,14 +764,15 @@ def main():
                         show_labels=args.show_labels,
                     ),
                 )
+            axis_pose = corrected_value if name in corrected_streams else value
             if (
                 args.pose_markers == "axes"
                 and "pose" in name
-                and np.isfinite(value).all()
+                and np.isfinite(axis_pose).all()
                 and np.isfinite(pts[0]).all()
             ):
                 orientation = Rotation.from_euler(
-                    args.pose_euler_sequence, value[3:], degrees=not args.pose_radians
+                    args.pose_euler_sequence, axis_pose[3:], degrees=not args.pose_radians
                 ).as_matrix()
                 label = {
                     "head_pose": "Head VIVE",
@@ -947,7 +949,13 @@ def main():
         skipped_missing_head_frames=skipped_frames,
         tracking_interpolated=args.interpolate_tracking,
         image_resolution=[width, height],
-        hand_alignment="repaired_sides_world_coordinates"
+        hand_alignment="reviewed_rigid_binding"
+        if args.reviewed_data
+        and any(
+            w.get("model") == "wrist_local_rigid"
+            for w in wrist_calibration.get("wrists", {}).values()
+        )
+        else "repaired_sides_world_coordinates"
         if args.hand_points_dir
         else "raw_parquet_world_coordinates"
         if args.raw_hands

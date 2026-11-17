@@ -132,11 +132,24 @@ class RebuildTests(unittest.TestCase):
             for side, columns in position_groups(name):
                 x = np.column_stack([original[c].to_numpy() for c in columns])
                 valid = np.isfinite(x).all(1)
+                from scipy.spatial.transform import Rotation
+
+                if name in ("action.parquet", "observation.state.parquet"):
+                    angles = np.column_stack(
+                        [original[f"{side}_wrist_{a}"].to_numpy() for a in ("roll", "pitch", "yaw")]
+                    )
+                    offsets = Rotation.from_euler("xyz", angles, degrees=True).apply(
+                        alignment["wrists"][side]["offset_local_m"]
+                    )
+                else:
+                    offsets = np.tile(alignment["wrists"][side]["offset_local_m"], (len(x), 1))
+                    if "hand_" in name:
+                        valid &= original["timestamp"].to_numpy() <= 0.1
                 for i, c in enumerate(columns):
                     changed.add(c)
                     np.testing.assert_allclose(
                         result[c].to_numpy()[valid] - original[c].to_numpy()[valid],
-                        alignment["wrists"][side]["offset_m"][i],
+                        offsets[valid, i],
                         atol=1e-7,
                     )
                     np.testing.assert_equal(

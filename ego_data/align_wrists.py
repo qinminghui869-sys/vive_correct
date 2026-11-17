@@ -13,6 +13,7 @@ import pyarrow.parquet as pq
 from PIL import Image, ImageTk
 from render_rerun import frames, table, nearest
 from wrist_alignment import pose_matrix, backproject, project_world, fit_samples
+from depth_metadata import load_metadata
 
 ROOT = Path(__file__).resolve().parent
 COLORS = {"left": "#00ddff", "right": "#ff5599"}
@@ -49,9 +50,7 @@ class App:
         self.videos = self.dataset / "videos/chunk-000"
         self.depth_key = "observation.images.depth_headband_left_rectified"
         self.ann = self.dataset / "annotation/chunk-000" / self.depth_key / "episode_000000"
-        self.k = json.loads((self.ann / "episode_000000_meta.json").read_text())["intrinsics"][
-            "left"
-        ]
+        self.k = load_metadata(self.ann)["intrinsics"]["left"]
         self.times = pq.read_table(self.data / (self.depth_key + ".parquet"))[
             "timestamp"
         ].to_numpy()

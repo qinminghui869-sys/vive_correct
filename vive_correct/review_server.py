@@ -2,6 +2,7 @@
 
 import argparse
 import getpass
+import hashlib
 import json
 import secrets
 import threading
@@ -9,16 +10,23 @@ from concurrent.futures import ThreadPoolExecutor
 from copy import deepcopy
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from time import perf_counter
+from time import perf_counter, monotonic, time
 from urllib.parse import parse_qs, urlparse
 
 import cv2
+import numpy as np
 
 from vive_correct.human_review import ReviewStore, decode_frame, output_directory
+from vive_correct.dataset import VIDEO_SUFFIX
 from vive_correct.rerun_export import DEFAULT_MOUNT
 from vive_correct.review_actions import export_approved
 from vive_correct.review_bundle import approve, review_state
-from vive_correct.review_io import read_json
+from vive_correct.review_io import read_json, atomic_json, output_lock
+from vive_correct.axis_calibration import preview, axis_angles, local_rotation, enrich_pose
+from vive_correct.runtime_cache import CACHE, cached_file, file_stamp, source_stamp
+from vive_correct.feature_progress import scan_progress
+from vive_correct.task_locks import reserve, adopt, operation_lock
+from vive_correct.source_data import baseline_read
 
 DEFAULT_PORT = 18763
 UI = Path(__file__).with_name("review_ui")
@@ -26,35 +34,155 @@ UI = Path(__file__).with_name("review_ui")
 
 class ReviewServer(ThreadingHTTPServer):
     daemon_threads = True
+    request_queue_size = 32
 
-    def __init__(self, output, port=DEFAULT_PORT, calibration=DEFAULT_MOUNT):
-        self.store = ReviewStore(output)
+    def __init__(
+        self,
+        output,
+        port=DEFAULT_PORT,
+        calibration=DEFAULT_MOUNT,
+        *,
+        approve_jobs=2,
+        export_jobs=1,
+        preview_jobs=4,
+        frame_jobs=4,
+    ):
+        if min(approve_jobs, export_jobs, preview_jobs, frame_jobs) < 1:
+            raise ValueError("并发数必须为正整数")
+        self.store = ReviewStore(output, allow_empty=True)
         self.calibration = Path(calibration)
         self.token = secrets.token_urlsafe(32)
         self.jobs = {}
         self.job_lock = threading.Lock()
-        self.episode_locks = [threading.Lock() for _ in self.store.paths]
+        self.catalog_lock = threading.Lock()
+        self.last_refresh = 0.0
+        self.preview_slots = threading.BoundedSemaphore(preview_jobs)
+        self.frame_slots = threading.BoundedSemaphore(frame_jobs)
+        self.known_jobs = set()
+        self.validated = {}
+        self.validation_lock = threading.Lock()
         super().__init__(("127.0.0.1", port), ReviewHandler)
-        self.executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix="review-export")
+        self.service_lock = output_lock(self.store.output, name=".review_server.lock")
+        try:
+            self.service_lock.__enter__()
+        except Exception:
+            super().server_close()
+            raise
+        self.executor = ThreadPoolExecutor(
+            max_workers=approve_jobs, thread_name_prefix="review-approve"
+        )
+        self.export_executor = ThreadPoolExecutor(
+            max_workers=export_jobs, thread_name_prefix="review-export"
+        )
+        self.refresh()
 
     def server_close(self):
         super().server_close()
         if hasattr(self, "executor"):
             self.executor.shutdown(wait=True)
+            self.export_executor.shutdown(wait=True)
+            self.service_lock.__exit__(None, None, None)
+
+    def refresh(self):
+        with self.catalog_lock:
+            if monotonic() - self.last_refresh < 0.5:
+                return
+            self.store.refresh()
+            for index, path in enumerate(self.store.paths):
+                if index in self.known_jobs:
+                    continue
+                job_path = path.with_name("review_job.json")
+                if job_path.exists():
+                    job = read_json(job_path)
+                    if job.get("running"):
+                        job.update(
+                            status="interrupted", running=False, error="审核服务已重启，请重试"
+                        )
+                        atomic_json(job_path, job)
+                    with self.job_lock:
+                        self.jobs[index] = job
+                self.known_jobs.add(index)
+            self.last_refresh = monotonic()
+
+    def entry_version(self, index):
+        p = self.store.path(index)
+        return (
+            file_stamp(p),
+            file_stamp(p.with_name("human_review.json")),
+            file_stamp(p.with_name("approval.json")),
+        )
+
+    def list_version(self):
+        versions = [self.entry_version(i) for i in range(len(self.store.paths))]
+        return hashlib.sha256(repr(versions).encode()).hexdigest()
+
+    def summary(self, index):
+        try:
+            state = self.store.load(index)
+            pointer = self.store.path(index).with_name("approval.json")
+            bundle = read_json(pointer) if pointer.exists() else {}
+            state["approved"] = (
+                state["status"] == "ready" and bundle.get("review_revision") == state["revision"]
+            )
+            if not state["approved"] and state["status"] == "ready":
+                state.update(status="pending", pending_reason="请重新通过审核保存依据")
+            state["validation"] = "summary"
+            return state
+        except (OSError, ValueError, KeyError, TypeError) as error:
+            return dict(
+                id=index,
+                episode=str(self.store.path(index).parent),
+                status="failed",
+                approved=False,
+                unavailable=True,
+                error=str(error),
+            )
+
+    def state(self, index, *, full=False):
+        # Polling checks identities, not large-file hashes. Public mutations always
+        # perform the original full validation independently of this display cache.
+        state = self.store.load(index)
+        pointer = self.store.path(index).with_name("approval.json")
+        bundle = read_json(pointer) if pointer.exists() else {}
+        key = (
+            self.entry_version(index),
+            file_stamp(self.calibration),
+            source_stamp(Path(state["episode"])),
+            tuple(file_stamp(p) for p in bundle.get("artifacts", {})),
+        )
+        with self.validation_lock:
+            previous = self.validated.get(index)
+        if not full:
+            if previous and previous[0] == key:
+                return deepcopy(previous[1])
+            state = self.summary(index)
+            state.update(
+                approved=False,
+                status="pending",
+                pending_reason="依据尚未校验或输入已变化，请重新加载本条数据",
+            )
+            return state
+        result = review_state(self.store, index, self.calibration)
+        with self.validation_lock:
+            self.validated[index] = (key, deepcopy(result))
+        return result
 
     def start_job(self, index, kind, payload=None):
-        self.store.path(index)
+        path = self.store.path(index)
         if kind not in ("approve", "export"):
             raise ValueError("未知任务")
-        if not self.episode_locks[index].acquire(blocking=False):
-            raise ValueError("这条数据正在处理；可继续审核其他数据")
-        job = dict(index=index, kind=kind, status="queued", running=True, error=None)
-        with self.job_lock:
-            self.jobs[index] = job
+        reservation = reserve(path.parent)
+        job = dict(
+            index=index, kind=kind, status="queued", running=True, error=None, queued_at=time()
+        )
         try:
-            self.executor.submit(self.process_one, index, kind, deepcopy(payload))
+            with self.job_lock:
+                self.jobs[index] = job
+                atomic_json(path.with_name("review_job.json"), job)
+            executor = self.executor if kind == "approve" else self.export_executor
+            executor.submit(self.process_one, index, kind, deepcopy(payload), reservation)
         except Exception:
-            self.episode_locks[index].release()
+            reservation.close()
             self.update_job(index, status="failed", running=False)
             raise
         return dict(running=True, submitted=[index], kind=kind)
@@ -62,45 +190,89 @@ class ReviewServer(ThreadingHTTPServer):
     def update_job(self, index, **values):
         with self.job_lock:
             self.jobs[index].update(values)
+            atomic_json(self.store.path(index).with_name("review_job.json"), self.jobs[index])
 
-    def process_one(self, index, kind, payload):
-        started = perf_counter()
-        try:
-            self.update_job(index, status="validating")
-            if kind == "approve":
-                approve(self.store, index, payload, self.calibration)
-                self.update_job(index, status="approved")
-            else:
-                row = export_approved(
-                    self.store,
-                    index,
-                    self.calibration,
-                    progress=lambda status: self.update_job(index, status=status),
-                )
-                self.update_job(index, **{k: v for k, v in row.items() if k != "index"})
-        except Exception as error:
-            self.update_job(index, status="failed", error=str(error))
-        finally:
+    def process_one(self, index, kind, payload, reservation):
+        with adopt(reservation):
+            started = perf_counter()
             try:
-                state = review_state(self.store, index, self.calibration)
-                self.update_job(index, review=state, episode=state["episode"])
-            except (ValueError, OSError, KeyError):
-                pass
-            self.update_job(index, running=False, elapsed_s=round(perf_counter() - started, 3))
-            self.episode_locks[index].release()
+                self.update_job(
+                    index,
+                    status="validating",
+                    queue_s=round(time() - self.jobs[index]["queued_at"], 3),
+                )
+                if kind == "approve":
+                    approve(self.store, index, payload, self.calibration)
+                    self.update_job(index, status="approved")
+                else:
+                    row = export_approved(
+                        self.store,
+                        index,
+                        self.calibration,
+                        progress=lambda status: self.update_job(index, status=status),
+                    )
+                    self.update_job(index, **{k: v for k, v in row.items() if k != "index"})
+            except Exception as error:
+                self.update_job(index, status="failed", error=str(error))
+            finally:
+                try:
+                    state = self.state(index, full=True)
+                    self.update_job(index, review=state, episode=state["episode"])
+                except (ValueError, OSError, KeyError):
+                    pass
+                self.update_job(index, running=False, elapsed_s=round(perf_counter() - started, 3))
 
     def save_review(self, index, payload):
-        self.store.path(index)
-        lock = self.episode_locks[index]
-        if not lock.acquire(blocking=False):
-            raise ValueError("这条数据正在处理；可继续审核其他数据")
-        try:
+        with operation_lock(self.store.path(index).parent):
             self.store.save(index, payload)
             with self.job_lock:
                 self.jobs.pop(index, None)
-            return review_state(self.store, index, self.calibration)
-        finally:
-            lock.release()
+                self.store.path(index).with_name("review_job.json").unlink(missing_ok=True)
+            return self.state(index, full=True)
+
+    def axis_preview(self, index, payload):
+        angles = axis_angles(payload)
+        geometry = {k: payload.get(k) for k in ("side", "frame_index", "quad")}
+        state = self.store.load(index)
+        episode = Path(state["episode"])
+        with baseline_read(episode):
+            stamp = source_stamp(episode)
+            key = (
+                "axis_geometry",
+                json.dumps(
+                    [state["binding"], stamp, read_json(self.calibration), geometry], sort_keys=True
+                ),
+            )
+
+            def calculate():
+                with self.preview_slots:
+                    return preview(episode, payload.get("side"), geometry, self.calibration)
+
+            cached = CACHE.get(key, calculate)
+            if source_stamp(episode) != stamp:
+                raise ValueError("预览期间源数据发生变化，请重试")
+            result = deepcopy(cached)
+            result["axis_angles_deg"] = angles.tolist()
+            sample = result["calibration_sample"]
+            correction = local_rotation(payload)
+            sample["rotation_local"] = correction.tolist()
+            sample["rotation_camera_corrected"] = (
+                np.asarray(sample["rotation_camera_source"]) @ correction
+            ).tolist()
+            return enrich_pose(result, sample, result["camera_K"])
+
+    def frame_png(self, index, frame):
+        episode = Path(self.store.load(index)["episode"])
+
+        def encode():
+            with self.frame_slots:
+                image, _ = decode_frame(episode, frame)
+                ok, encoded = cv2.imencode(".png", image)
+                if not ok:
+                    raise ValueError("无法编码原帧")
+                return encoded.tobytes()
+
+        return cached_file(("frame_png", frame), episode / VIDEO_SUFFIX, encode)
 
 
 class ReviewHandler(BaseHTTPRequestHandler):
@@ -122,7 +294,10 @@ class ReviewHandler(BaseHTTPRequestHandler):
             "default-src 'self'; img-src 'self' blob:; frame-ancestors 'none'",
         )
         self.end_headers()
-        self.wfile.write(body)
+        try:
+            self.wfile.write(body)
+        except (BrokenPipeError, ConnectionResetError):
+            pass  # A newer browser edit superseded this response.
 
     def authorized(self, write=False):
         port = self.server.server_port
@@ -148,6 +323,7 @@ class ReviewHandler(BaseHTTPRequestHandler):
             return
         try:
             path, query = self.arguments()
+            self.server.refresh()
             store = self.server.store
             if path in ("/", "/review.js", "/review.css"):
                 name = "index.html" if path == "/" else path[1:]
@@ -161,23 +337,26 @@ class ReviewHandler(BaseHTTPRequestHandler):
             if path == "/api/episodes":
                 return self.send(
                     200,
-                    [
-                        review_state(store, i, self.server.calibration)
-                        for i in range(len(store.paths))
-                    ],
+                    [self.server.summary(i) for i in range(len(store.paths))],
                 )
             if path == "/api/status":
                 with self.server.job_lock:
                     jobs = deepcopy(list(self.server.jobs.values()))
-                result = dict(jobs=jobs, running=any(j["running"] for j in jobs))
+                result = dict(
+                    jobs=jobs,
+                    running=any(j["running"] for j in jobs),
+                    list_version=self.server.list_version(),
+                    scan=scan_progress(store.output),
+                    discovery_errors=store.catalog_errors,
+                )
                 summary = store.output / "repair_manifest.json"
                 result["summary"] = read_json(summary) if summary.exists() else None
                 return self.send(200, result)
             index = int(query.get("id", ["-1"])[0])
             if path == "/api/review-state":
-                return self.send(200, review_state(store, index, self.server.calibration))
+                return self.send(200, self.server.state(index))
             if path == "/api/episode":
-                state = review_state(store, index, self.server.calibration)
+                state = self.server.state(index, full=True)
                 state["default_reviewer"] = getpass.getuser()
                 state["candidates"] = store.candidates(index)
                 try:
@@ -187,12 +366,9 @@ class ReviewHandler(BaseHTTPRequestHandler):
                     state.update(frame_count=0, video_error=str(error))
                 return self.send(200, state)
             if path == "/api/frame":
-                state = store.load(index)
-                image, _ = decode_frame(Path(state["episode"]), int(query["frame"][0]))
-                ok, encoded = cv2.imencode(".png", image)
-                if not ok:
-                    raise ValueError("无法编码原帧")
-                return self.send(200, encoded.tobytes(), "image/png")
+                return self.send(
+                    200, self.server.frame_png(index, int(query["frame"][0])), "image/png"
+                )
             return self.send(404, {"error": "未知接口"})
         except (ValueError, OSError, KeyError, TypeError, cv2.error) as error:
             self.send(400, {"error": str(error)})
@@ -206,6 +382,10 @@ class ReviewHandler(BaseHTTPRequestHandler):
             if not 0 < length <= 1024 * 1024:
                 raise ValueError("无效的请求大小")
             payload = json.loads(self.rfile.read(length))
+            if not isinstance(payload, dict):
+                raise ValueError("请求必须为 JSON 对象")
+            if path == "/api/axis-preview":
+                return self.send(200, self.server.axis_preview(int(query["id"][0]), payload))
             if path == "/api/confirm-export":
                 return self.send(
                     410,
@@ -230,11 +410,23 @@ def main(argv=None):
     parser.add_argument("--out", type=output_directory, required=True)
     parser.add_argument("--port", type=int, default=DEFAULT_PORT)
     parser.add_argument("--initial-mount", type=Path, default=DEFAULT_MOUNT)
+    parser.add_argument("--approve-jobs", type=int, default=2)
+    parser.add_argument("--export-jobs", type=int, default=1)
+    parser.add_argument("--preview-jobs", type=int, default=4)
+    parser.add_argument("--frame-jobs", type=int, default=4)
     args = parser.parse_args(argv)
     if not 1 <= args.port <= 65535:
         parser.error("--port 必须在 1–65535 之间")
     try:
-        server = ReviewServer(args.out, args.port, args.initial_mount)
+        server = ReviewServer(
+            args.out,
+            args.port,
+            args.initial_mount,
+            approve_jobs=args.approve_jobs,
+            export_jobs=args.export_jobs,
+            preview_jobs=args.preview_jobs,
+            frame_jobs=args.frame_jobs,
+        )
     except OSError as error:
         parser.exit(
             1,

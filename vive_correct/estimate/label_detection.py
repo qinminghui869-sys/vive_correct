@@ -271,6 +271,9 @@ def tracker_body_metrics(image, quad, config=None):
     _, labels, stats, _ = cv2.connectedComponentsWithStats(black)
     component = labels[cy - y0, cx - x0]
     x, y, w, h, area = stats[component]
+    # Count repeated keys on this body, not unrelated white objects in the ROI.
+    body_points = cv2.findNonZero((labels == component).astype(np.uint8))
+    body_hull = cv2.convexHull(body_points)
     ratio = float(area / max(cv2.contourArea(q.astype(np.float32)), 1))
     fill = float(area / (w * h))
     touches = (
@@ -287,6 +290,7 @@ def tracker_body_metrics(image, quad, config=None):
             0.15 * label_area <= aa <= 3 * label_area
             and aa / (ww * hh) > 0.4
             and min(ww, hh) > 4
+            and cv2.pointPolygonTest(body_hull, tuple(centers[k]), False) >= 0
             and cv2.pointPolygonTest(
                 q.astype(np.float32), tuple((centers[k] + [x0, y0]).tolist()), False
             )

@@ -2,6 +2,8 @@
 
 import argparse
 import uuid
+from time import perf_counter
+from vive_correct.task_locks import operation_lock
 from pathlib import Path
 
 from vive_correct.batch.report_io import digest
@@ -16,9 +18,16 @@ from vive_correct.source_data import apply_files, baseline_read
 
 
 def export_approved(store, index, calibration, progress=None):
+    with operation_lock(store.path(index).parent):
+        return _export_approved(store, index, calibration, progress)
+
+
+def _export_approved(store, index, calibration, progress=None):
+    started = perf_counter()
     with output_lock(store.path(index).parent), baseline_read(Path(store.load(index)["episode"])):
         bundle = load_bundle(store, index, calibration)
         prepared = stage_files(bundle)
+        prepared_s = perf_counter() - started
         cache_path = Path(bundle["directory"]) / "rrd_manifest.json"
         if cache_path.exists():
             cached = read_json(cache_path)
@@ -53,6 +62,7 @@ def export_approved(store, index, calibration, progress=None):
         try:
             if progress:
                 progress("rendering")
+            render_start = perf_counter()
             export_recordings(run, Path(bundle["calibration"]))
             row.update(read_json(run / "rerun/manifest.json")["entries"][0])
             if row["status"] != "complete":
@@ -62,6 +72,9 @@ def export_approved(store, index, calibration, progress=None):
                 recording_sha256=digest(Path(row["recording"])),
                 stats_sha256=digest(Path(row["recording"]).with_suffix(".json")),
                 corrected_files=prepared["files"],
+                timing=dict(
+                    prepare_s=round(prepared_s, 3), render_s=round(perf_counter() - render_start, 3)
+                ),
             )
             atomic_json(cache_path, row)
         except Exception as error:
@@ -95,7 +108,7 @@ def rebuild(output, calibration=DEFAULT_MOUNT, *, in_place=False, episode=None):
     for index in indices:
         row = dict(index=index, status="failed")
         try:
-            with output_lock(store.path(index).parent):
+            with operation_lock(store.path(index).parent), output_lock(store.path(index).parent):
                 source = Path(store.load(index)["episode"])
                 row["episode"] = str(source)
                 with baseline_read(source):

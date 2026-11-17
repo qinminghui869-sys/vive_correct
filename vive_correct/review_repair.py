@@ -3,6 +3,7 @@
 import argparse
 import uuid
 from contextlib import ExitStack
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from pathlib import Path
 from time import perf_counter
@@ -28,6 +29,7 @@ from vive_correct.review_io import (
     read_json,
 )
 from vive_correct.source_data import DATA, original_path
+from vive_correct.task_locks import operation_lock
 
 
 def write_corrected_wrists(episode, destination, alignment):
@@ -81,25 +83,51 @@ def cached_result(store, index, mount, code_signature):
 
 
 def repair_dataset(
-    output, calibration=DEFAULT_MOUNT, *, indices=None, progress=None, expected_revision=None
+    output,
+    calibration=DEFAULT_MOUNT,
+    *,
+    indices=None,
+    progress=None,
+    expected_revision=None,
+    export_jobs=1,
 ):
+    if export_jobs < 1:
+        raise ValueError("--export-jobs 必须为正整数")
     store = ReviewStore(output)
     targets = list(range(len(store.paths))) if indices is None else list(dict.fromkeys(indices))
     for index in targets:
         store.path(index)
-    if any(store.path(i).with_name("approval.json").exists() for i in targets):
+    if any(
+        store.path(i).with_name("approval.json").exists()
+        or (
+            store.path(i).with_name("human_review.json").exists()
+            and read_json(store.path(i).with_name("human_review.json")).get("schema_version") == 3
+        )
+        for i in targets
+    ):
         from vive_correct.review_actions import export_approved
 
-        rows = []
-        for i in targets:
+        def export_one(i):
             try:
-                rows.append(export_approved(store, i, calibration, progress))
-            except Exception as error:
-                rows.append(
-                    dict(
-                        index=i, episode=store.load(i)["episode"], status="failed", error=str(error)
+                state = store.load(i)
+                if state["status"] != "ready":
+                    return dict(
+                        index=i,
+                        episode=state["episode"],
+                        status="pending",
+                        reason=state["pending_reason"],
                     )
+                return export_approved(store, i, calibration, progress)
+            except Exception as error:
+                return dict(
+                    index=i,
+                    episode=str(store.path(i).parent),
+                    status="failed",
+                    error=str(error),
                 )
+
+        with ThreadPoolExecutor(max_workers=export_jobs) as pool:
+            rows = list(pool.map(export_one, targets))
         return dict(
             status="complete" if all(r["status"] == "complete" for r in rows) else "incomplete",
             entries=rows,
@@ -110,6 +138,7 @@ def repair_dataset(
     # Long work never holds the shared manifest lock. Browser jobs select exactly one episode.
     with ExitStack() as locks:
         for index in sorted(targets):
+            locks.enter_context(operation_lock(store.path(index).parent))
             locks.enter_context(output_lock(store.path(index).parent))
         if expected_revision is not None and any(
             store.load(i)["revision"] != expected_revision for i in targets
@@ -147,6 +176,11 @@ def repair_dataset(
                     if progress:
                         progress("preparing")
                     report = store.observation_report(index)
+                    # Historical position-only exports never imply an axis review.
+                    for observation in report["observations"]:
+                        for pose in observation["stickers"].values():
+                            pose.pop("axis_angles_deg", None)
+                            pose.pop("axis_convention", None)
                     episode = Path(report["episode"])
                     folder = run / f"{index:04d}_{episode.name}"
                     report_path = folder / "observations.json"
@@ -246,9 +280,10 @@ def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--out", type=output_directory, required=True)
     parser.add_argument("--initial-mount", type=Path, default=DEFAULT_MOUNT)
+    parser.add_argument("--export-jobs", type=int, default=1)
     args = parser.parse_args(argv)
     try:
-        summary = repair_dataset(args.out, args.initial_mount)
+        summary = repair_dataset(args.out, args.initial_mount, export_jobs=args.export_jobs)
     except (ValueError, OSError, KeyError) as error:
         parser.exit(1, f"repair: {error}\n")
     for row in summary["entries"]:

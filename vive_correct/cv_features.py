@@ -5,12 +5,18 @@ These are appearance candidates, not accepted poses or verified physical hands.
 
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from dataclasses import replace
+from collections import Counter
+import heapq
 import html
 import json
 import hashlib
 import logging
 from pathlib import Path
 import time
+import uuid
+
+from vive_correct.review_io import atomic_json, output_lock
+from vive_correct.task_locks import operation_lock
 
 import cv2
 import numpy as np
@@ -38,21 +44,47 @@ def review_config(config):
 
 
 def feature_candidate_allowed(candidate, config):
+    return feature_rejection_reason(candidate, config) is None
+
+
+def feature_rejection_reason(candidate, config, *, allow_truncated_body=False):
+    """Explain feature-only gates separately from pixel detector rejection counts."""
     q = np.asarray(candidate.get("quad", []), float)
     if q.shape != (4, 2):
-        return False
+        return "invalid_quad"
     a, b = np.roll(q, 1, axis=0) - q, np.roll(q, -1, axis=0) - q
     lengths = np.linalg.norm(a, axis=1) * np.linalg.norm(b, axis=1)
     if np.any(lengths <= 0):
-        return False
+        return "invalid_quad"
     angles = np.degrees(np.arccos(np.clip((a * b).sum(1) / lengths, -1, 1)))
-    return bool(
-        angles.min() >= config.feature_min_corner_angle
-        and candidate.get("accepted")
-        and candidate.get("box_supported")
-        and candidate.get("compact_body")
-        and candidate.get("nearby_white_components", 0) < config.body_max_white_neighbors
-        and candidate.get("label_black_fraction", 1) <= config.max_label_black_fraction
+    return next(
+        (
+            reason
+            for failed, reason in (
+                (angles.min() < config.feature_min_corner_angle, "acute_corner"),
+                (not candidate.get("accepted"), "appearance_rejected"),
+                (not candidate.get("box_supported"), "unsupported_black_box"),
+                (
+                    candidate.get("nearby_white_components", 0) >= config.body_max_white_neighbors,
+                    "repeated_white_neighbors",
+                ),
+                (
+                    not candidate.get("compact_body")
+                    and not (
+                        allow_truncated_body
+                        and candidate.get("body_context_edges", 0) > 0
+                        and candidate.get("body_fill", 0) >= config.body_min_fill
+                    ),
+                    "noncompact_body",
+                ),
+                (
+                    candidate.get("label_black_fraction", 1) > config.max_label_black_fraction,
+                    "label_black_fraction",
+                ),
+            )
+            if failed
+        ),
+        None,
     )
 
 
@@ -194,6 +226,31 @@ def feature_scan_phases(limit, fps, stride, config, *, search="fast"):
     return phases[:2] if search == "fast" else phases
 
 
+def progressive_samples(ranges):
+    """Visit both ends, then bisect the largest time gap before densifying."""
+    indices = sorted({i for r in ranges for i in range(r["start"], r["stop"], r["stride"])})
+    if not indices:
+        return
+    yield indices[0]
+    if len(indices) == 1:
+        return
+    yield indices[-1]
+    gaps = []
+
+    def push(lo, hi):
+        if hi - lo > 1:
+            heapq.heappush(gaps, (indices[lo] - indices[hi], lo, hi))
+
+    push(0, len(indices) - 1)
+    while gaps:
+        _, lo, hi = heapq.heappop(gaps)
+        target = (indices[lo] + indices[hi]) / 2
+        mid = min(range(lo + 1, hi), key=lambda j: abs(indices[j] - target))
+        yield indices[mid]
+        push(lo, mid)
+        push(mid, hi)
+
+
 def scan_features(episode, output, config, stride=15, max_frames=None, *, search="fast"):
     if search not in ("fast", "full"):
         raise ValueError("Feature search must be fast or full")
@@ -215,6 +272,10 @@ def scan_features(episode, output, config, stride=15, max_frames=None, *, search
         review_config=review_config(config).report(),
         examined_frames=0,
         decoded_frames=0,
+        sampled_frame_indices=[],
+        detector_rejections={},
+        feature_rejections={},
+        sampling_order="progressive_time_coverage" if search == "fast" else "chronological",
         stride=stride,
         search_mode=search,
         max_frames=max_frames,
@@ -226,6 +287,7 @@ def scan_features(episode, output, config, stride=15, max_frames=None, *, search
     )
     best, pairs, error = {}, [], None
     candidate_pool = []
+    detector_rejections, feature_rejections = Counter(), Counter()
     capture = cv2.VideoCapture(str(video)) if video.is_file() else None
     loose = review_config(config)
     total = int(capture.get(cv2.CAP_PROP_FRAME_COUNT)) if capture and capture.isOpened() else 0
@@ -255,7 +317,10 @@ def scan_features(episode, output, config, stride=15, max_frames=None, *, search
             report["scan_phases"].append(phase)
             if phase["name"] != "initial":
                 capture.set(cv2.CAP_PROP_POS_FRAMES, 0)
-            for index in range(limit):
+            indices = progressive_samples(phase["ranges"]) if search == "fast" else range(limit)
+            for index in indices:
+                if search == "fast" and index in seen:
+                    continue
                 if search == "fast":
                     if report["examined_frames"] >= config.feature_fast_max_samples:
                         report["stop_reason"], stopped = "sample_budget", True
@@ -263,8 +328,18 @@ def scan_features(episode, output, config, stride=15, max_frames=None, *, search
                     if time.perf_counter() - start >= config.feature_fast_timeout_s:
                         report["stop_reason"], stopped = "time_budget", True
                         break
+                if search == "fast":
+                    if not capture.set(cv2.CAP_PROP_POS_FRAMES, index):
+                        error = f"seek_failed_at_{index}"
+                        break
                 if not capture.grab():
                     error = f"decode_failed_at_{index}"
+                    break
+                if (
+                    search == "fast"
+                    and abs(capture.get(cv2.CAP_PROP_POS_FRAMES) - (index + 1)) > 0.5
+                ):
+                    error = f"inaccurate_seek_at_{index}"
                     break
                 report["decoded_frames"] += 1
                 sampled = any(
@@ -279,23 +354,24 @@ def scan_features(episode, output, config, stride=15, max_frames=None, *, search
                     error = f"decode_failed_at_{index}"
                     break
                 report["examined_frames"] += 1
+                report["sampled_frame_indices"].append(index)
                 phase["examined_frames"] += 1
                 h, w = image.shape[:2]
-                found = detect_label_candidates(
+                detection = detect_label_candidates(
                     image, {"left": [0, 0, w, h]}, config=loose, preserve_variants=True
-                )["candidates"]["left"]
+                )
+                detector_rejections.update(detection.get("rejected", {}))
+                found = detection["candidates"]["left"]
                 current = {}
                 for candidate in found:
-                    if not feature_candidate_allowed(candidate, config):
-                        continue
-                    if (
-                        candidate.get("nearby_white_components", 0)
-                        >= config.body_max_white_neighbors
-                    ):
+                    rejection = feature_rejection_reason(
+                        candidate, config, allow_truncated_body=True
+                    )
+                    if rejection:
+                        feature_rejections[rejection] += 1
                         continue
                     if candidate["quad"][:, 1].mean() < h * config.feature_min_y_fraction:
-                        continue
-                    if not candidate.get("compact_body"):
+                        feature_rejections["above_feature_region"] += 1
                         continue
                     strict = label_metrics(image, candidate["quad"], config)
                     accepted = strict["accepted"] and strict.get("compact_body", False)
@@ -304,11 +380,14 @@ def scan_features(episode, output, config, stride=15, max_frames=None, *, search
                         frame_index=index,
                         status="appearance_candidate" if accepted else "review_candidate",
                         standard_rejection=strict["reason"],
+                        review_reasons=[]
+                        if candidate.get("compact_body")
+                        else ["body_extent_unresolved"],
                     )
                     if strict["accepted"]:
                         item.update(strict)
                     if not item.get("compact_body"):
-                        item["standard_rejection"] = "noncompact_body_LED_supported"
+                        item["standard_rejection"] = "body_extent_unresolved"
                     # Black surroundings/enclosure participate even for review-only candidates.
                     item["selection_score"] = item["score"] * (1 if accepted else 0.75)
                     candidate_pool.append(_serialize(item))
@@ -343,6 +422,14 @@ def scan_features(episode, output, config, stride=15, max_frames=None, *, search
 
     if capture:
         capture.release()
+    report["detector_rejections"] = dict(detector_rejections)
+    report["feature_rejections"] = dict(feature_rejections)
+    if (
+        search == "fast"
+        and report["examined_frames"] >= config.feature_fast_max_samples
+        and report["stop_reason"] == "scan_complete"
+    ):
+        report["stop_reason"] = "sample_budget"
     if error:
         report["stop_reason"] = "error"
     selected, report["mode"] = choose_features(best, pairs, config.pair_quality_ratio)
@@ -355,6 +442,7 @@ def _finish_features(report, selected, output, config, candidate_pool, start, er
     output.mkdir(parents=True, exist_ok=True)
     report.update(
         schema_version=2,
+        publication_version=1,
         frame_index_base=0,
         coordinate_system="rectified video pixels; origin top-left; x right; y down",
         corner_order="q0,q1,q2,q3 cyclic in image coordinates; start is not guaranteed top-left",
@@ -522,10 +610,15 @@ def render_features(output, reports, config_report):
                 "<p>"
                 + html.escape(
                     f"{side}: frame_index={item['frame_index']} (0-based); "
+                    f"status={item['status']}; "
                     f"quad={item['quad']}; label_center_px={item.get('label_center_px', 'legacy: unavailable')}"
                 )
                 + "</p>"
             )
+            if "body_extent_unresolved" in item.get("review_reasons", []):
+                cards.append(
+                    "<p>外壳与手套相连或超出搜索区域，仅作待复核候选，请人工核对设备身份与四角。</p>"
+                )
             if item.get("clean_frame_image"):
                 cards.append(
                     '<p><a href="'
@@ -565,7 +658,7 @@ def render_features(output, reports, config_report):
         delivery / "features_summary.json",
         dict(counts=counts, detector_config=config_report, human_verified=False, episodes=reports),
     )
-    (delivery / "index.html").write_text(
+    (delivery / "index.html.tmp").write_text(
         '<!doctype html><meta charset="utf-8"><title>VIVE CV 特征图</title>'
         "<style>body{font:16px/1.6 sans-serif;margin:24px;background:#eee}article{background:white;padding:20px;margin:24px 0}"
         "img{max-width:100%}.frame{max-height:640px}.features{display:flex;gap:12px}.features img{width:49%;object-fit:contain}</style>"
@@ -574,11 +667,36 @@ def render_features(output, reports, config_report):
         "<p>" + html.escape(str(counts)) + "</p>" + "".join(cards),
         encoding="utf-8",
     )
+    (delivery / "index.html.tmp").replace(delivery / "index.html")
     print(f"Feature delivery: {delivery / 'index.html'} {counts}", flush=True)
     return counts
 
 
 def run_feature_dataset(args, dataset, output, config):
+    if getattr(args, "dry_run", False):
+        return _run_feature_dataset(args, dataset, output, config)
+    output = Path(output).resolve()
+    for episode in select_episodes(dataset, args.episodes_file):
+        if output == episode or output in episode.parents or episode in output.parents:
+            raise ValueError("选帧输出目录必须与源数据分离")
+    output.mkdir(parents=True, exist_ok=True)
+    with output_lock(output, name=".feature_scan.lock"):
+        return _run_feature_dataset(args, dataset, output, config)
+
+
+def _scan_published(episode, folder, config, stride, max_frames, search, run_id):
+    folder.mkdir(parents=True, exist_ok=True)
+    with operation_lock(folder), output_lock(folder):
+        review = folder / "human_review.json"
+        if (folder / "approval.json").exists() or (
+            review.exists() and read_review_schema(review) == 3
+        ):
+            raise ValueError("已有人工审核记录，请使用新输出目录重新选帧")
+        atomic_json(folder / "scan_status.json", dict(run_id=run_id, status="scanning"))
+        return scan_features(episode, folder, config, stride, max_frames, search=search)
+
+
+def _run_feature_dataset(args, dataset, output, config):
     episodes = select_episodes(dataset, args.episodes_file)
     if not episodes:
         raise ValueError("No episodes found")
@@ -626,38 +744,89 @@ def run_feature_dataset(args, dataset, output, config):
             ]
             if report.get("human_review_file"):
                 paths.append(report["human_review_file"])
+            if report.get("publication_version"):
+                paths.append(str(folder / "candidate_pool.json"))
             if (
                 report.get("schema_version") == 2
                 and report.get("search_mode") == search
                 and all(Path(p).is_file() for p in paths)
-                and not report.get("error")
             ):
                 reports[str(episode)] = report
                 continue
+            if path.with_name("approval.json").exists() or (
+                path.with_name("human_review.json").exists()
+                and read_review_schema(path.with_name("human_review.json")) == 3
+            ):
+                reports[str(episode)] = dict(
+                    report, error="审核结果不完整；请使用新输出目录重新选帧"
+                )
+                continue
         pending.append((episode, folder))
+    run_id = uuid.uuid4().hex
+    rows = {
+        str(ep): dict(
+            episode=str(ep),
+            folder=str((output / "features" / ep.relative_to(dataset)).relative_to(output)),
+            status="failed"
+            if reports.get(str(ep), {}).get("error")
+            else "complete"
+            if str(ep) in reports
+            else "queued",
+            error=reports.get(str(ep), {}).get("error"),
+            elapsed_s=reports.get(str(ep), {}).get("seconds"),
+        )
+        for ep in episodes
+    }
+    progress_path = output / "feature_progress.json"
+
+    def publish(status="running"):
+        atomic_json(progress_path, dict(run_id=run_id, status=status, entries=list(rows.values())))
+
+    publish()
+    last_summary = 0.0
     with ProcessPoolExecutor(max_workers=min(args.jobs, max(1, len(pending)))) as pool:
         futures = {
             pool.submit(
-                scan_features, ep, folder, config, stride, args.max_frames, search=search
+                _scan_published, ep, folder, config, stride, args.max_frames, search, run_id
             ): ep
             for ep, folder in pending
         }
         for future in as_completed(futures):
             ep = futures[future]
-            reports[str(ep)] = future.result()
-            print(
-                f"[{len(reports)}/{len(episodes)}] {ep.parent.name}/{ep.name}: "
-                f"{reports[str(ep)]['mode']}, sides={list(reports[str(ep)]['features'])}, "
-                f"stop={reports[str(ep)]['stop_reason']}, "
-                f"examined={reports[str(ep)]['examined_frames']}, "
-                f"elapsed={reports[str(ep)]['seconds']:.1f}s",
-                flush=True,
-            )
-            render_features(
-                output, [reports[str(p)] for p in episodes if str(p) in reports], config.report()
-            )
-    render_features(output, [reports[str(p)] for p in episodes], config.report())
-    return int(any(r["error"] for r in reports.values()))
+            try:
+                report = future.result()
+                reports[str(ep)] = report
+                rows[str(ep)].update(
+                    status="failed" if report.get("error") else "complete",
+                    error=report.get("error"),
+                    elapsed_s=report.get("seconds"),
+                )
+                print(
+                    f"[{len(reports)}/{len(episodes)}] {ep.parent.name}/{ep.name}: "
+                    f"{report['mode']}, stop={report['stop_reason']}, elapsed={report['seconds']:.1f}s",
+                    flush=True,
+                )
+            except Exception as error:
+                rows[str(ep)].update(status="failed", error=str(error))
+                logging.getLogger(__name__).exception("Feature worker failed: %s", ep)
+            publish()
+            if time.monotonic() - last_summary >= 1:
+                render_features(
+                    output,
+                    [reports[str(p)] for p in episodes if str(p) in reports],
+                    config.report(),
+                )
+                last_summary = time.monotonic()
+    render_features(
+        output, [reports[str(p)] for p in episodes if str(p) in reports], config.report()
+    )
+    failed = any(r["status"] == "failed" for r in rows.values())
+    publish("failed" if failed else "complete")
+    return int(failed)
+
+
+def read_review_schema(path):
+    return json.loads(path.read_text()).get("schema_version")
 
 
 def refilter_features(source_folder, output, config, rescan_missing=True):
@@ -730,7 +899,9 @@ def refilter_features(source_folder, output, config, rescan_missing=True):
             previous["video"],
         )
         raise ValueError("Cannot decode cached source video")
-    kept = [c for c in pool if feature_candidate_allowed(c, config)]
+    kept = [
+        c for c in pool if feature_rejection_reason(c, config, allow_truncated_body=True) is None
+    ]
     by_frame, best = {}, {}
     for candidate in kept:
         side = "left" if np.asarray(candidate["quad"])[:, 0].mean() < width / 2 else "right"
