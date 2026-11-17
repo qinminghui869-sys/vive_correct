@@ -48,7 +48,9 @@ def log_hand_projection(path, points, camera, intrinsic, color, inspect=False, l
 
 
 def table(path):
-    t = pq.read_table(path)
+    from vive_correct.source_data import original_path
+
+    t = pq.read_table(original_path(path))
     names = [n for n in t.column_names if n not in ("timestamp", "episode_index")]
     if "hand_left_points" in str(path) or "hand_right_points" in str(path):
         sys.path.insert(0, str(ROOT.parent))
@@ -202,7 +204,21 @@ def main():
         help="Show both original 25-node MANUS groups alongside RGB",
     )
     ap.add_argument("--hand-points-dir", type=Path, help="Verified repaired Parquet directory")
+    ap.add_argument(
+        "--reviewed-data",
+        type=Path,
+        help="Already corrected six-file directory; no additional offsets",
+    )
     args = ap.parse_args()
+    if args.reviewed_data and (
+        args.raw_hands
+        or args.hand_points_dir
+        or args.hand_calibration
+        or not args.wrist_calibration
+    ):
+        ap.error(
+            "--reviewed-data requires wrist provenance and cannot combine other hand corrections"
+        )
     if args.raw_hands and (args.wrist_calibration or args.hand_cloud_fade_radius):
         ap.error("--raw-hands cannot use wrist correction or cloud thinning")
     if args.frames:
@@ -246,6 +262,7 @@ def main():
             end=args.end,
             selected=args.frames,
             hand_points_dir=args.hand_points_dir,
+            reviewed_data=args.reviewed_data,
         )
         return
     if args.rgb_only or not depth_available(args.dataset):
@@ -279,6 +296,21 @@ def main():
             "eye_gaze",
         )
     }
+    corrected_streams = {}
+    if args.reviewed_data:
+        for name in (
+            "left_wrist_pose",
+            "right_wrist_pose",
+            "hand_left_points",
+            "hand_right_points",
+        ):
+            corrected_streams[name] = resample_tracking(
+                table(args.reviewed_data / f"observation.{name}.parquet"),
+                times,
+                pose="pose" in name,
+                sequence=args.pose_euler_sequence,
+                degrees=not args.pose_radians,
+            )
     manus = None
     if args.manus_nodes:
         raw = pq.read_table(data / "observation.hand_skeleton.parquet")
@@ -613,12 +645,17 @@ def main():
             for side in ("left", "right"):
                 wrist_pose = nearest(streams[side + "_wrist_pose"], ts, 0.005)
                 hand_points = nearest(streams["hand_" + side + "_points"], ts, 0.005).reshape(21, 3)
-                hand_points = hand_points + correction_world(
-                    wrist_calibration,
-                    side,
-                    wrist_pose,
-                    args.pose_euler_sequence,
-                    not args.pose_radians,
+                hand_points = (
+                    nearest(corrected_streams["hand_" + side + "_points"], ts, 0.005).reshape(21, 3)
+                    if args.reviewed_data
+                    else hand_points
+                    + correction_world(
+                        wrist_calibration,
+                        side,
+                        wrist_pose,
+                        args.pose_euler_sequence,
+                        not args.pose_radians,
+                    )
                 )
                 corrected_hands.append((hand_points - camera[:3, 3]) @ camera[:3, :3])
             valid_flat = np.flatnonzero(valid)
@@ -664,7 +701,14 @@ def main():
                     ),
                 )
             pts = value.reshape(-1, 3) if "points" in name else value[:3].reshape(1, 3)
-            if "head" not in name and not args.raw_hands:
+            if name in corrected_streams:
+                corrected_value = nearest(corrected_streams[name], ts, 0.005)
+                pts = (
+                    corrected_value.reshape(-1, 3)
+                    if "points" in name
+                    else corrected_value[:3].reshape(1, 3)
+                )
+            elif "head" not in name and not args.raw_hands:
                 side = "left" if "left" in name else "right"
                 wrist_pose = nearest(streams[side + "_wrist_pose"], ts, 0.005)
                 if "points" in name and side in hand_calibration.get("hands", {}):

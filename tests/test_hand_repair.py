@@ -8,7 +8,7 @@ import numpy as np
 import pyarrow as pa
 import pyarrow.parquet as pq
 
-from vive_correct.hand_repair import NODES, OFFSET, identify_sides, repair, world_points
+from vive_correct.hand_repair import NODES, identify_sides, repair, world_points
 from vive_correct.batch.hand_overlay import JOINTS
 
 

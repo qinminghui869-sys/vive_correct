@@ -17,7 +17,9 @@ else:
 
 
 def pose_stream(path):
-    t = pq.read_table(path)
+    from vive_correct.source_data import original_path
+
+    t = pq.read_table(original_path(path))
     return t["timestamp"].to_numpy(), np.column_stack(
         [t[n].to_numpy() for n in ("x", "y", "z", "roll", "pitch", "yaw")]
     )
@@ -70,6 +72,8 @@ def build_alignment(
         head = resample_tracking(
             streams["head"], [ts], pose=True, sequence=sequence, degrees=degrees
         )[1][0]
+        if not np.isfinite(head).all():
+            raise ValueError(f"No synchronized head pose at RGB frame {frame}")
         camera = pose_matrix(head, sequence, degrees) @ mount
         for side, item in observation["stickers"].items():
             if side not in ("left", "right"):
@@ -83,6 +87,8 @@ def build_alignment(
             wrist = resample_tracking(
                 streams[side + "_wrist"], [ts], pose=True, sequence=sequence, degrees=degrees
             )[1][0]
+            if not np.isfinite(wrist).all():
+                raise ValueError(f"No synchronized {side} wrist pose at RGB frame {frame}")
             wrist_matrix = pose_matrix(wrist, sequence, degrees)
             target = camera[:3, :3] @ origin + camera[:3, 3]
             samples.append(
@@ -96,6 +102,7 @@ def build_alignment(
                     wrist_world_m=wrist[:3].tolist(),
                     delta_world_m=(target - wrist[:3]).tolist(),
                     wrist_rotation=wrist_matrix[:3, :3].tolist(),
+                    wrist_pose_original=wrist.tolist(),
                     quality_status=item.get("quality_status"),
                     depth_refinement=refinement,
                 )

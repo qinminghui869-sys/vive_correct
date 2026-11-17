@@ -20,9 +20,9 @@ from vive_correct.batch.bilateral_search import scan_manifest
 from vive_correct.batch.workflow import BatchConfig, run as run_batch
 from vive_correct.config import run_settings
 from vive_correct.dataset import (
-    VIDEO_SUFFIX,
-    TIMESTAMP_SUFFIX,
-    discover,
+    TIMESTAMP_SUFFIX as TIMESTAMP_SUFFIX,
+    VIDEO_SUFFIX as VIDEO_SUFFIX,
+    discover as discover,
     input_signature,
     select_episodes,
     source_hashes,

@@ -2,6 +2,7 @@
 outputs/
 output/
 samples
+/tmp/
 /ego_data/L3-*/
 *.rrd
 *.log

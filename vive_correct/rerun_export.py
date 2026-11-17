@@ -51,10 +51,38 @@ def export_recordings(work, calibration, *, open_viewer=False):
                 report = manifest_path.parent / report
             if digest(report) != entry["report_sha256"]:
                 raise ValueError("Reviewed report hash mismatch")
-            alignment = build_alignment(episode, report, calibration, refine_depth=True)
+            from vive_correct.human_review import verify_provenance
+
+            verify_provenance(json.loads(report.read_text()))
+            if entry.get("alignment"):
+                prepared = Path(entry["alignment"])
+                if digest(prepared) != entry["alignment_sha256"]:
+                    raise ValueError("Prepared alignment hash mismatch")
+                alignment = json.loads(prepared.read_text())
+                if (
+                    alignment["source_report_sha256"] != entry["report_sha256"]
+                    or Path(alignment["episode"]).resolve() != episode
+                    or alignment["camera_calibration"] != json.loads(calibration.read_text())
+                ):
+                    raise ValueError("Prepared alignment inputs changed; run repair again")
+            else:
+                alignment = build_alignment(episode, report, calibration, refine_depth=True)
             alignment_path = folder / "wrist_alignment.json"
             alignment_path.write_text(json.dumps(alignment, ensure_ascii=False, indent=2) + "\n")
-            hands, hand_status = prepare_hands(episode, folder / "hands")
+            reviewed_data = entry.get("reviewed_data")
+            if reviewed_data:
+                for item in entry["corrected_files"].values():
+                    if digest(Path(item["path"])) != item["sha256"]:
+                        raise ValueError("Corrected Parquet hash mismatch")
+                hands, hand_status = (
+                    None,
+                    {
+                        "status": "reviewed_source_translated",
+                        "note": "Original hand joints and side mapping retained; fixed world translation only",
+                    },
+                )
+            else:
+                hands, hand_status = prepare_hands(episode, folder / "hands")
             row["hands"] = hand_status
             hand_status_path = folder / "hand_status.json"
             hand_status_path.write_text(
@@ -97,6 +125,8 @@ def export_recordings(work, calibration, *, open_viewer=False):
                 str(pending),
             ]
             command += ["--hand-status", str(hand_status_path)]
+            if reviewed_data:
+                command += ["--reviewed-data", str(reviewed_data)]
             if hands:
                 command += ["--hand-points-dir", str(hands)]
             if not alignment["pose_degrees"]:

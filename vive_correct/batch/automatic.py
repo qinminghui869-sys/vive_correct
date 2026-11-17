@@ -27,7 +27,6 @@ from vive_correct.batch.selection_policy import (
     load_constraints,
     temporal_check,
     visual_quality,
-    rank,
     choose_pair,
     good_pair,
 )

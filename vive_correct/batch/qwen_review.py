@@ -1,6 +1,5 @@
 """Review visible identity only; geometry and axis constraints stay deterministic."""
 
-import json
 import time
 
 import cv2

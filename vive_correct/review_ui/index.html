@@ -1,0 +1,124 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="review-token" content="__REVIEW_TOKEN__" />
+    <title>Vive 特征帧审核</title>
+    <link rel="stylesheet" href="/review.css" />
+    <script src="/review.js" defer></script>
+  </head>
+  <body>
+    <header>
+      <div><strong>Vive 特征帧审核</strong><span>确认标签与物理手侧，再导出整段修正</span></div>
+    </header>
+    <div id="message" role="status" aria-live="polite"></div>
+    <main>
+      <aside>
+        <div class="aside-title">数据列表 <span id="progress"></span></div>
+        <nav id="episodes"></nav>
+      </aside>
+      <section>
+        <h1 id="episode-title">加载中…</h1>
+        <p id="hint"></p>
+        <div class="overview">
+          <article>
+            <h2>物理左手 <span id="overview-left-status"></span></h2>
+            <canvas id="overview-left" aria-label="左手参考帧"></canvas>
+            <canvas
+              id="overview-left-crop"
+              width="360"
+              height="180"
+              aria-label="左手标签放大图"
+            ></canvas>
+            <div class="toolbar">
+              <span id="overview-left-frame"></span><button id="edit-left">调整左手</button>
+            </div>
+          </article>
+          <article>
+            <h2>物理右手 <span id="overview-right-status"></span></h2>
+            <canvas id="overview-right" aria-label="右手参考帧"></canvas>
+            <canvas
+              id="overview-right-crop"
+              width="360"
+              height="180"
+              aria-label="右手标签放大图"
+            ></canvas>
+            <div class="toolbar">
+              <span id="overview-right-frame"></span><button id="edit-right">调整右手</button>
+            </div>
+          </article>
+        </div>
+        <div class="toolbar">
+          <label>审核人 <input id="reviewer" placeholder="姓名或工号" autocomplete="name" /></label>
+          <button id="approve" class="primary" disabled>通过审核</button>
+          <button id="export" disabled>导出 RRD 文件</button>
+          <span>通过审核保存重建依据；RRD 按需导出，两者均不覆盖源文件。</span>
+        </div>
+        <p id="saved-state"></p>
+        <details id="editor">
+          <summary>需要调整时展开：重选帧、修改四角或手侧</summary>
+          <div class="toolbar">
+            <label
+              >物理手侧
+              <select id="side">
+                <option value="left">左手</option>
+                <option value="right">右手</option>
+              </select></label
+            >
+            <button id="swap">交换左右选择</button><span id="side-status"></span>
+          </div>
+          <div class="toolbar">
+            <button id="previous">上一帧</button
+            ><label>帧号（从 0 开始） <input id="frame" type="number" min="0" value="0" /></label>
+            <button id="jump">跳转</button><button id="next">下一帧</button
+            ><span id="frame-count"></span>
+            <label
+              >候选
+              <select id="candidate">
+                <option value="">选择候选…</option>
+              </select></label
+            >
+          </div>
+          <input id="timeline" type="range" min="0" max="0" value="0" aria-label="视频帧时间轴" />
+          <div class="toolbar">
+            <label><input id="overlay" type="checkbox" checked />显示标注</label>
+            <label
+              >缩放
+              <select id="zoom">
+                <option value="1">适应窗口</option>
+                <option value="1.5">150%</option>
+                <option value="2">200%</option>
+                <option value="3">300%</option>
+              </select></label
+            >
+            <button id="undo">撤销末点</button><button id="clear">清空四角</button>
+            <span>沿标签边缘依次点击四角；拖动圆点修正。</span>
+          </div>
+          <div class="viewer">
+            <canvas id="frame-canvas" aria-label="原帧与可编辑四角"></canvas>
+          </div>
+          <div class="detail">
+            <div>
+              <h2>局部放大</h2>
+              <canvas id="crop" width="360" height="240"></canvas>
+            </div>
+            <div class="decision">
+              <p id="coordinates"></p>
+              <label>备注 <textarea id="notes" rows="2"></textarea></label>
+              <div class="toolbar">
+                <button id="accept" class="primary">确认此侧并保存</button
+                ><button id="reject">拒绝此侧并保存</button
+                ><button id="save">仅暂存，不通过</button>
+              </div>
+            </div>
+          </div>
+        </details>
+        <details open>
+          <summary>导出状态</summary>
+          <pre id="export-status">尚未导出</pre>
+        </details>
+      </section>
+    </main>
+  </body>
+</html>

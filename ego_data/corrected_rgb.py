@@ -16,7 +16,15 @@ from vive_correct.estimate.geometry import VIDEO_KEY
 
 
 def export_corrected_rgb(
-    episode, output, alignment_path, *, start=0, end=None, selected=None, hand_points_dir=None
+    episode,
+    output,
+    alignment_path,
+    *,
+    start=0,
+    end=None,
+    selected=None,
+    hand_points_dir=None,
+    reviewed_data=None,
 ):
     episode, output = Path(episode), Path(output)
     alignment = json.loads(Path(alignment_path).read_text())
@@ -28,7 +36,9 @@ def export_corrected_rgb(
     wanted = set(selected) if selected else set(range(start, end + 1))
     if not wanted or min(wanted) < 0 or max(wanted) >= len(times):
         raise ValueError("Requested frames outside rectified RGB stream")
-    wrists, hands, offsets = {}, {}, {}
+    from vive_correct.source_data import original_path
+
+    wrists, hands, offsets, corrected_wrists, original_hands = {}, {}, {}, {}, {}
     for side in ("left", "right"):
         correction = alignment["wrists"][side]
         offset = np.asarray(correction["offset_m"], float)
@@ -42,9 +52,25 @@ def export_corrected_rgb(
             sequence=alignment["pose_euler_sequence"],
             degrees=alignment["pose_degrees"],
         )[1][:, :3]
-        # Only use hands whose side mapping passed the existing ergonomics checks.
-        if hand_points_dir:
-            table = pq.read_table(Path(hand_points_dir) / f"observation.hand_{side}_points.parquet")
+        if reviewed_data:
+            corrected_wrists[side] = resample_tracking(
+                pose_stream(Path(reviewed_data) / f"observation.{side}_wrist_pose.parquet"),
+                times,
+                pose=True,
+                sequence=alignment["pose_euler_sequence"],
+                degrees=alignment["pose_degrees"],
+            )[1][:, :3]
+            raw = pq.read_table(original_path(data / f"observation.hand_{side}_points.parquet"))
+            raw_points = np.column_stack(
+                [raw[f"{j}_{a}"].to_numpy() for j in JOINTS for a in "xyz"]
+            )
+            original_hands[side] = resample_tracking(
+                (raw["timestamp"].to_numpy(), raw_points), times
+            )[1].reshape(-1, 21, 3)
+        # Reviewed files already contain the final positions and retain the original hand shape.
+        hand_directory = reviewed_data or hand_points_dir
+        if hand_directory:
+            table = pq.read_table(Path(hand_directory) / f"observation.hand_{side}_points.parquet")
             points = np.column_stack([table[f"{j}_{a}"].to_numpy() for j in JOINTS for a in "xyz"])
             hands[side] = resample_tracking((table["timestamp"].to_numpy(), points), times)[
                 1
@@ -91,7 +117,9 @@ def export_corrected_rgb(
                     if not np.isfinite(point).all():
                         invalid[side].append(index)
                         continue
-                    corrected = point + offsets[side]
+                    corrected = (
+                        corrected_wrists[side][index] if reviewed_data else point + offsets[side]
+                    )
                     rr.log(
                         path + "/original",
                         rr.Points3D([point], colors=[140, 140, 140], radii=0.008),
@@ -102,7 +130,21 @@ def export_corrected_rgb(
                         rr.LineStrips3D([[point, corrected]], colors=color, radii=0.001),
                     )
                     if side in hands:
-                        points = hands[side][index] + offsets[side]
+                        points = (
+                            hands[side][index]
+                            if reviewed_data
+                            else hands[side][index] + offsets[side]
+                        )
+                        if side in original_hands:
+                            original = original_hands[side][index]
+                            valid = np.isfinite(original).all(axis=1)
+                            if valid.any():
+                                rr.log(
+                                    path + "/hand_original",
+                                    rr.Points3D(
+                                        original[valid], colors=[140, 140, 140], radii=0.003
+                                    ),
+                                )
                         if np.isfinite(points).all():
                             rr.log(path + "/hand", rr.Points3D(points, colors=color, radii=0.004))
                             rr.log(

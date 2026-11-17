@@ -1,94 +1,90 @@
 # 运行指南
 
-基本安装和命令见[项目首页](../README.md)。统一入口为 `python3 -m vive_correct run`；旧入口 `python3 vive_correct/run_dataset.py` 仍可使用。
+安装与日常命令见 [项目首页](../README.md)。检测入口：`python3 -m vive_correct run`。全部命令见 `python3 -m vive_correct --help`。
 
 ## 输入
 
-标签识别需要每条样本的矫正左目视频、时间戳和 `calibrations/rectify_params.yaml`。视频分辨率必须与标定一致。
+每条样本至少需要：
 
-安装检查使用头部和双腕姿态。骨架叠图使用左右手 21 点 parquet，缺失时仍可生成标签图片。Rerun 导出还需要深度、有效深度掩码、深度内参、眼动视频和 gaze 数据。
-
-## 纯 CV 全流程
-
-```bash
-bash scripts/run_cv.sh samples outputs/cv_full --jobs 4
+```text
+<episode>/
+├── videos/.../observation.images.headband_left_rgb_rectified/episode_000000.mp4
+├── data/.../observation.images.headband_left_rgb_rectified.parquet
+└── calibrations/rectify_params.yaml
 ```
 
-等效入口是 `python3 -m vive_correct run --profile cv --stage all --model-review off --dataset samples --out outputs/cv_full --jobs 4`。脚本另将 stdout/stderr 保存为 `run.log` 并保留退出码。
+视频分辨率须与标定一致。安装检查需要头部与双腕姿态；骨架叠图需要左右手 21 点 parquet。Rerun 完整导出还需要深度、掩码、深度内参、眼动视频与 gaze。
 
-只接受校正左目视频，缺失或解码失败报错。顺序运行连续跟踪/几何观测与特征选帧，产物包括帧序号、四角、标签中心、原帧、特征图和人工审核模板。`batch/delivery/index.html` 为特征图入口，`tracked.html` 为独立跟踪报告。模型密钥和 Codex 登录均不需要；不会自动进行物理身份验证、轨迹修复或 Rerun 导出。
+纯 CV 只接受矫正左目；缺失或解码失败直接报错，不回退原始左目。
 
-特征首轮扫描前10秒每5帧、后段每15帧；仍缺任意一侧时，后段每5帧补扫，再按需全段逐帧补扫。纯 CV 身份初始化需要连续5帧可靠双侧关联；之后直接按当前帧几何选取观测，不再检查稳定窗口。跟踪过程不跳帧。
+## 配置档
 
-完整输入结构、40条清单命令、错误处理和审核步骤见[纯 CV 指南](../docs/cv_detection.md)。后面的模型识别流程与模型交付目录只适用于 Astra/legacy 路径。
+| Profile | 说明 |
+|---------|------|
+| `cv` | 纯 OpenCV：连续跟踪 + 特征选帧；不调模型 |
+| `astra`（默认） | Codex CLI 调用 `gpt-6-astra` |
+| `legacy` | API（Qwen）；需 `openai.local.json` 或环境变量 |
 
-## 模型与参数
+预设在 [config/run.yaml](config/run.yaml)，命令行参数优先。几何阈值见 [config/estimate.yaml](config/estimate.yaml)，批处理见 [config/batch.yaml](config/batch.yaml)，CV 检测见 [config/cv.yaml](config/cv.yaml)。头相机外参见 [相机参数](../calibrations/README.md)。
 
-默认 `--profile astra` 使用 Codex 登录账户调用 `gpt-6-astra`，不读取 API 密钥。预设在 [config/run.yaml](config/run.yaml)，显式命令参数优先：
+### Astra 默认行为（摘要）
 
-- 粗扫步长 15 帧，自动补扫步长 3 帧，Tracker 局部搜索 6 帧。
-- 首轮评审 4 个候选，每批 4 个，每条样本最多 24 个几何合格候选。
-- 身份置信阈值 0.8，超时 300 秒，重试参数 2。
-- CPU 并发 10，模型并发 4，可用 `--jobs` 和 `--model-jobs` 调整。
+粗扫步长 15、补扫 3、Tracker 局部搜索 6 帧；首轮评审 4 候选/批，每样本最多 24 个几何合格候选；身份置信阈值 0.8；CPU 并发 10、模型并发 4（可用 `--jobs` / `--model-jobs`）。
 
-API 模式使用 `--profile legacy`。复制 `openai.example.json` 为 `openai.local.json`，填写 `api_key`、`base_url` 和 `model`；也可使用 `OPENAI_API_KEY`、`OPENAI_BASE_URL`、`OPENAI_MODEL`。配置优先级为命令参数、环境变量、`.env`、JSON。当前 API 入口要求 Qwen 模型。
+`legacy` 使用更旧的搜索参数。只换通道、保留 Astra 搜索参数时用 `--transport api`。Codex 请求保存在 `codex_requests/`。
 
-`legacy` 使用旧搜索参数：补扫步长 5、首轮 8、每批 1，不做 Tracker 局部搜索。若只想切换模型通道而保留 Astra 搜索参数，使用 `--transport api`。
+## 常用控制
 
-复核会发送全帧和局部图。Codex 请求的图片、提示和返回内容保存在 `codex_requests/`；该目录属于本地运行产物。
+```bash
+python3 -m vive_correct run --help
+```
 
-## 识别流程
+- `--episodes-file FILE`：JSON 样本清单，保持顺序
+- `--dry-run`：只预览计划（默认 `all` 阶段），不联网、不写结果
+- `--profile cv` / `--model-review off`：纯 CV；详见 [纯 CV 指南](../docs/cv_detection.md)
+- `--fixed-candidates`：关闭补扫与提前停止（对比实验）
+- `--tracker-guided-frames N`：局部搜索帧数；`0` 关闭
+- `--initial-mount FILE`：头相机外参
+- `--stage …`：分阶段运行（见下）
 
-1. 检查输入和模型连接，从原始视频生成候选。
-2. 用像素边缘拟合四角，通过 PnP 计算标签中心，检查 11 帧窗口的稳定性。
-3. 模型判断标签身份、可见性和物理左右手。
-4. 未获得稳定双手时补扫一次：加密扫描，并在模型定位的 Tracker 区域内搜索标签。
-5. 根据质量选择候选，再用无候选轮廓的原图独立复核 Tracker 归属。
-6. 输出有效观测、缺失手侧、停止原因和错误记录。
+## 模型识别流程（Astra / legacy）
 
-模型框只限定搜索区域，不作为标签角点或中心。允许 Tracker 外壳部分出画，但标签四角必须完整。候选预算不包含 Tracker 定位和独立复核请求；每次独立复核最多检查 8 轮。
+1. 检查输入与模型连接，从视频生成候选
+2. 像素边缘拟合四角 → PnP 求标签中心 → 11 帧窗口稳定性
+3. 模型判断身份、可见性与物理左右手
+4. 未得稳定双手时补扫一次（加密 + Tracker 区域）
+5. 按质量选候选，再独立复核 Tracker 归属
+6. 输出观测、缺失手侧、停止原因
 
-不稳定候选可能保留为 `conditional_motion`。双手可以来自不同帧，不能据此计算同时刻相对位姿。身份复核仍是模型判断，结果需按用途人工检查。
-
-## 运行控制
-
-- `--episodes-file FILE`：JSON 数组中的相对样本路径，保持顺序；拒绝重复或未知路径。
-- `--dry-run`：仅用于默认 `all` 阶段。预览参数、样本和输入签名，不联网、不写结果；不检查视频解码或服务可用性。API 配置中的模型在正式执行时解析。
-- `--profile cv` 或 `--model-review off`：纯 CV 连续跟踪，每手选择最佳观测；首次双手窗口假设未交叉，结果仍未人工核验。参数见[纯 CV 指南](../docs/cv_detection.md)。兼容旧名称 `--qwen-review`；显式固定候选池消融仍保留旧半区流程。
-- `--fixed-candidates`：关闭补扫和提前停止，用于固定候选池比较。
-- `--tracker-guided-frames N`：局部搜索帧数，0 表示关闭。模型关闭、固定候选或基线回放模式不支持此项。
-- `--axis-baseline FILE`：加载与样本及报告哈希绑定的观测，保留已有结果并搜索缺失手。
-- `--baseline-only`：要求基线已有双手，跳过模型调用。
-- `--initial-mount FILE`：指定头相机外参；默认值说明见[相机参数](../calibrations/README.md)。
-
-完整参数见 `python3 -m vive_correct run --help`。几何和时序阈值在 [config/estimate.yaml](config/estimate.yaml)，独立扫描与安装检查参数在 [config/batch.yaml](config/batch.yaml)。
+模型框只限定搜索区域，不是角点或中心。双手可来自不同帧，不能当同时刻相对位姿。身份仍是模型判断，使用前按用途人工检查。
 
 ## 阶段与产物
 
-模型路径默认 `--stage all` 执行估计、扫描、复核、安装检查和交付；纯 CV 的 `all` 范围见上文。`estimate`、`scan` 用于分阶段诊断；`finish` 接受已有人工复核文件，具体参数见帮助。
+模型路径默认 `--stage all`：估计 → 扫描 → 复核 → 安装检查 → 交付。纯 CV 的 `all` 为跟踪 + 特征 + 审核材料，不自动审核/修复/导出 Rerun。
 
 ```text
 <out>/
-├── run_plan.json                 # 参数、样本、输入签名和代码哈希
-├── estimates/                    # 初始估计
-├── search/、search_refined/      # 粗扫与补扫候选
-├── qwen_reviews/                 # 模型评审；实际模型以报告字段为准
-├── codex_requests/               # Codex 请求记录
+├── run_plan.json              # 参数、样本、输入签名、代码哈希
+├── estimates/                 # 初始估计 / CV 跟踪
+├── features/                  # CV 特征图与审核模板
+├── search/、search_refined/   # 粗扫与补扫（模型路径）
+├── qwen_reviews/              # 模型评审
 ├── batch/
-│   ├── results/                  # 完整工作报告
-│   ├── run_metadata.json         # 运行参数与计划哈希
-│   ├── delivery/index.html       # 图片与精简报告入口
-│   └── bilateral_results.zip     # 交付包
-└── rerun/                        # 录制、转换报告和失败日志
+│   ├── results/               # 工作报告
+│   ├── delivery/index.html    # 图片与精简报告入口
+│   └── bilateral_results.zip
+└── rerun/                     # 录制与转换日志
 ```
 
-恢复运行会检查模型、参数、样本、代码哈希及输入大小和修改时间。旧复核目录没有 `run_plan.json` 时，请换新输出目录；已有结果仍可查看或重新导出：
+相同命令可恢复未完成运行。模型、参数、输入或代码变化后请换新输出目录。
 
 ```bash
-python3 -m vive_correct run --out outputs/demo --stage gallery
+python3 -m vive_correct run --out outputs/demo --stage gallery   # 只更新展示
 python3 -m vive_correct run --out outputs/demo --stage rerun --open-rerun
 ```
 
-重新导出需要完整源数据与工作报告；自定义安装外参也须保持一致。缺少任意一侧有效原点时不导出录制。接口或解码错误保留诊断并返回非零退出码，不当作标签否决。
+缺少任一侧有效原点时不导出录制。交付字段见 [报告接口](../docs/observations_schema.md)。
 
-每条工作报告的 `model_review.stop_reason` 记录结束原因，`missing_hands` 记录缺失手侧。交付字段与坐标约定见[报告接口](../docs/observations_schema.md)，实验工具见[模型对比实验](../docs/experiments.md)。
+## 审核与重建
+
+人工审核、独立 RRD 导出、六文件备份覆盖及失败排查见 [审核与重建指南](../docs/review_rebuild.md)。普通检测与导出不改源文件；只有显式执行 `rebuild --in-place` 才覆盖源文件。
