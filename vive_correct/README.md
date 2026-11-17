@@ -1,93 +1,80 @@
-# 运行指南
+# 运行与配置
 
-安装与日常命令见 [项目首页](../README.md)。检测入口：`python3 -m vive_correct run`。全部命令见 `python3 -m vive_correct --help`。
+安装与纯 CV 快速开始见 [项目首页](../README.md)。所有命令通过 `python3 -m vive_correct <命令> --help` 查看完整参数。
 
-## 输入
+## 输入要求
 
-每条样本至少需要：
+纯 CV 选帧只需矫正左目视频；进入几何审核还需要时间戳和标定。基础目录如下：
 
 ```text
 <episode>/
-├── videos/.../observation.images.headband_left_rgb_rectified/episode_000000.mp4
-├── data/.../observation.images.headband_left_rgb_rectified.parquet
+├── videos/chunk-000/observation.images.headband_left_rgb_rectified/episode_000000.mp4
+├── data/chunk-000/episode_000000/observation.images.headband_left_rgb_rectified.parquet
 └── calibrations/rectify_params.yaml
 ```
 
-视频分辨率须与标定一致。安装检查需要头部与双腕姿态；骨架叠图需要左右手 21 点 parquet。Rerun 完整导出还需要深度、掩码、深度内参、眼动视频与 gaze。
+识别不回退到原始左目视频，视频分辨率须与标定一致。后续输入按阶段准备：
 
-纯 CV 只接受矫正左目；缺失或解码失败直接报错，不回退原始左目。
+- **轴向预览**：可同步的头部、对应腕部位姿及相机外参。
+- **通过审核／导出／重建**：完整的 [六个目标 Parquet](../docs/review_rebuild.md#3-重建六个文件)，审核时即校验其结构。
+- **完整深度 RRD**：额外准备深度、掩码、元数据及眼动输入，见 [RRD 说明](../ego_data/README_rerun.md#完整-rrd-的输入)。
 
-`eye_rgb` 当前仅用于 RRD 视频与注视点展示。更换内参或 `--initial-mount` 不会切换输入相机；眼动相机全流程还需统一配置视频、时间戳、内参/畸变、到头部 Vive 的外参及可选配准深度。
+`eye_rgb` 仅用于 RRD 眼动展示。`--initial-mount` 指定矫正左相机到头部的外参，不改变识别输入相机，详见 [相机参数](../calibrations/README.md)。
 
-## 配置档
+## 配置与优先级
 
-| Profile | 说明 |
-|---------|------|
-| `cv` | 纯 OpenCV：默认快速选帧；可显式开启连续跟踪 |
-| `astra`（默认） | Codex CLI 调用 `gpt-6-astra` |
-| `legacy` | API（Qwen）；需 `openai.local.json` 或环境变量 |
+`run --profile` 支持三种预设：
 
-预设在 [config/run.yaml](config/run.yaml)，命令行参数优先。几何阈值见 [config/estimate.yaml](config/estimate.yaml)，批处理见 [config/batch.yaml](config/batch.yaml)，CV 检测见 [config/cv.yaml](config/cv.yaml)。头相机外参见 [相机参数](../calibrations/README.md)。
+- `cv`：OpenCV 检测，无模型调用，默认 `--stage features`。
+- `astra`：默认模型路径，通过已登录的 Codex CLI 调用仓库配置的 `gpt-6-astra`，默认 `--stage all`。
+- `legacy`：API 模型路径，需配置 `openai.local.json` 或环境变量。
 
-### Astra 默认行为（摘要）
+显式命令行参数覆盖预设。各类默认值只在配置文件维护：
 
-粗扫步长 15、补扫 3、Tracker 局部搜索 6 帧；首轮评审 4 候选/批，每样本最多 24 个几何合格候选；身份置信阈值 0.8；CPU 并发 10、模型并发 4（可用 `--jobs` / `--model-jobs`）。
+- [run.yaml](config/run.yaml)：模型通道、并发与搜索参数。
+- [cv.yaml](config/cv.yaml)：CV 检测、选帧预算与跟踪参数。
+- [estimate.yaml](config/estimate.yaml)：标签尺寸与几何阈值。
+- [batch.yaml](config/batch.yaml)：批处理与复核参数。
 
-`legacy` 使用更旧的搜索参数。只换通道、保留 Astra 搜索参数时用 `--transport api`。Codex 请求保存在 `codex_requests/`。
+`scripts/run_cv.sh` 固定使用 `cv`，默认数据级并发为 4；直接运行 `run --profile cv` 的并发取配置预设。批量运行建议显式指定 `--jobs`。
 
-## 常用控制
+常用参数：`--episodes-file FILE` 限定样本；`--dry-run` 预览 `all/features` 计划，不调用模型或生成检测结果；`--initial-mount FILE` 指定外参。CV 扫描与调参见 [纯 CV 指南](../docs/cv_detection.md)。
+
+## 可选模型路径
 
 ```bash
-python3 -m vive_correct run --help
+python3 -m vive_correct run --dataset /path/to/dataset \
+  --out outputs/model --profile astra
 ```
 
-- `--episodes-file FILE`：JSON 样本清单，保持顺序
-- `--dry-run`：预览 `all` 或 `features` 计划，不联网、不写结果
-- `--profile cv` / `--model-review off`：纯 CV；详见 [纯 CV 指南](../docs/cv_detection.md)
-- `--fixed-candidates`：关闭补扫与提前停止（对比实验）
-- `--tracker-guided-frames N`：局部搜索帧数；`0` 关闭
-- `--initial-mount FILE`：头相机外参
-- `--stage …`：分阶段运行（见下）
+流程为：生成候选 → 像素四角与 PnP 几何检查 → 模型身份和侧别复核 → 必要时补扫 → 安装检查与交付。模型框仅限定搜索区域，不作为最终角点。双手可以来自不同帧，不能直接计算同时刻相对位姿。
 
-## 模型识别流程（Astra / legacy）
+使用 `--transport api` 可切换通道并保留当前 profile 的搜索参数。`--jobs` 控制数据处理并发，`--model-jobs` 控制模型并发；Codex 请求保存在 `codex_requests/`。
 
-1. 检查输入与模型连接，从视频生成候选
-2. 像素边缘拟合四角 → PnP 求标签中心 → 11 帧窗口稳定性
-3. 模型判断身份、可见性与物理左右手
-4. 未得稳定双手时补扫一次（加密 + Tracker 区域）
-5. 按质量选候选，再独立复核 Tracker 归属
-6. 输出观测、缺失手侧、停止原因
+`--fixed-candidates` 关闭补扫与提前停止，适合 [模型对比实验](../docs/experiments.md)；`--tracker-guided-frames 0` 关闭 Tracker 局部补扫。模型结果仍须按使用场景人工核查。
 
-模型框只限定搜索区域，不是角点或中心。双手可来自不同帧，不能当同时刻相对位姿。身份仍是模型判断，使用前按用途人工检查。
+## 阶段、续跑与产物
 
-## 阶段与产物
-
-模型路径默认 `--stage all`：估计 → 扫描 → 复核 → 安装检查 → 交付。纯 CV 默认 `--stage features` 快速生成审核材料；显式 `--stage all` 才增加整段跟踪。`--feature-search full` 可恢复完整选帧补扫，所有 CV 检测阶段都不自动审核、修复或导出 Rerun。
+纯 CV 默认仅选帧；显式 `--stage all` 才增加整段身份跟踪。CV 检测不自动审核、修正或导出 RRD。模型路径默认执行估计、扫描、复核、安装检查和交付；可加 `--rerun` 导出，或加 `--open-rerun` 导出并打开。
 
 ```text
 <out>/
-├── run_plan.json              # 参数、样本、输入签名、代码哈希
-├── feature_plan.json          # CV 选帧模式、预算配置与缓存绑定
-├── estimates/                 # 初始估计 / CV 跟踪
-├── features/                  # CV 特征图与审核模板
-├── search/、search_refined/   # 粗扫与补扫（模型路径）
-├── qwen_reviews/              # 模型评审
-├── batch/
-│   ├── results/               # 工作报告
-│   ├── delivery/index.html    # 图片与精简报告入口
-│   └── bilateral_results.zip
-└── rerun/                     # 录制与转换日志
+├── run_plan.json、feature_plan.json   # 运行计划与输入绑定，按路径生成
+├── features/                         # CV 候选、图片和人工记录
+├── estimates/                        # 估计与可选 CV 跟踪
+├── search/、search_refined/           # 模型路径粗扫与补扫
+├── qwen_reviews/                     # 模型复核（沿用历史目录名）
+├── batch/delivery/index.html         # 静态展示入口
+└── rerun/                            # 录制索引与日志
 ```
 
-相同命令可恢复未完成运行。模型、参数、输入或代码变化后请换新输出目录。
+相同命令可续跑；输入、检测配置或计算代码变化后使用新输出目录。已进入人工审核的特征结果不会被自动重扫覆盖。审核依据包及修正文件目录见 [产物与排查](../docs/review_rebuild.md#产物与排查)。
+
+已有模型结果可单独更新展示或录制：
 
 ```bash
-python3 -m vive_correct run --out outputs/demo --stage gallery   # 只更新展示
-python3 -m vive_correct run --out outputs/demo --stage rerun --open-rerun
+python3 -m vive_correct run --out outputs/model --stage gallery
+python3 -m vive_correct run --out outputs/model --stage rerun --open-rerun
 ```
 
-缺少任一侧有效原点时不导出录制。交付字段见 [报告接口](../docs/observations_schema.md)。
-
-## 审核与重建
-
-人工审核、独立 RRD 导出、六文件备份覆盖及失败排查见 [审核与重建指南](../docs/review_rebuild.md)。普通检测与导出不改源文件；只有显式执行 `rebuild --in-place` 才覆盖源文件。
+缺少任一侧有效原点时不导出模型路径录制。报告字段见 [字段与接口](../docs/observations_schema.md)。

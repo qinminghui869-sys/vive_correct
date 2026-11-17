@@ -1,16 +1,16 @@
 # 模型对比实验
 
-比较同一批候选在有无模型复核、不同模型下的结果。日常识别用 [项目首页](../README.md) 的 `run` 命令。
+比较同一批候选在有无模型复核、不同模型下的结果。日常流程见 [项目首页](../README.md)，模型配置见 [运行指南](../vive_correct/README.md#可选模型路径)。
 
 ## 固定候选池
 
 先扫描数据集，再冻结候选对照：
 
 ```bash
-python3 -m vive_correct.ablation --dataset samples \
+python3 -m vive_correct.ablation --dataset /path/to/dataset \
   --source-work outputs/scanned --out outputs/api_ablation
 
-python3 -m vive_correct.ablation --dataset samples \
+python3 -m vive_correct.ablation --dataset /path/to/dataset \
   --source-work outputs/scanned --out outputs/astra_ablation \
   --transport codex --codex-model gpt-6-astra
 ```

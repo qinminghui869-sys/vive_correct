@@ -1,10 +1,12 @@
 # Vive Correct
 
-从矫正左目视频识别腕部 Vive 标签，得到标签中心在相机系中的位置；经人工审核后，用固定世界平移修正整段腕部轨迹，并可用 Rerun 查看。
+从矫正左目视频识别腕部标签，经浏览器人工审核后，校准整段腕部位姿和已有手点，并导出 Rerun 录制（RRD）。默认推荐纯 CV 流程，无需模型密钥。
+
+流程：**选帧 → 人工审核 → 按需导出 RRD／重建 Parquet**。选帧与审核可并行，导出由人工触发。
 
 ## 安装
 
-需要 Python 3.10+。
+需要 Python 3.10+。以下命令均在项目根目录执行；数据应满足 [输入要求](vive_correct/README.md#输入要求)。
 
 ```bash
 python3 -m venv .venv
@@ -12,62 +14,47 @@ source .venv/bin/activate
 python3 -m pip install -r requirements.txt
 ```
 
-纯 CV 流程不需要模型密钥。默认模型路径使用 `gpt-6-astra`（需已登录的 Codex CLI）。
+## 快速开始
 
-## 推荐流程（纯 CV）
+选帧与审核使用同一输出目录，可同时运行，也可先选完再审核。
 
 ```bash
-# 1. 快速选帧：有界扫描 + 审核材料
+# 终端 A：选帧
 bash scripts/run_cv.sh /path/to/dataset outputs/cv --jobs 4
+```
 
-# 2. 浏览器审核（默认 http://127.0.0.1:18763）
+```bash
+# 终端 B：启动审核；每个新终端需先激活 .venv
 python3 -m vive_correct review --out outputs/cv
+```
 
-# 页面「通过审核」保存依据，「导出 RRD 文件」按需生成录制
-# 3. 导出完成后查看
+打开 `http://127.0.0.1:18763`，核对物理左右手、标签四角和 XYZ 轴，再点击 **通过审核**；需要录制时点击 **导出 RRD 文件**。未完成的编辑可 **仅暂存**。新结果自动加入列表，不覆盖当前编辑。
+
+导出完成后查看：
+
+```bash
 python3 -m vive_correct view outputs/cv
 ```
 
-打开 `outputs/cv/batch/delivery/index.html` 看特征图。默认跳过身份跟踪，每条最多检测 120 帧、扫描软时限 30 秒；双侧严格外观候选齐全则提前结束，缺手仍可人工补标。只读矫正左目，不调用模型。
+只处理部分数据时，在选帧命令后加 `--episodes-file episodes.json`，格式见 [样本清单](docs/cv_detection.md#选择样本与扫描模式)。相同配置可续跑；输入、检测配置或计算代码变化时使用新输出目录。
 
-需要完整补扫时加 `--feature-search full`；需要逐帧身份跟踪时再加 `--stage all`。不同模式使用独立输出目录。
+坐标轴调整、批量导出、源文件重建和排错见 [审核与重建指南](docs/review_rebuild.md)。
 
-常用选项：`--episodes-file` 限样本、`--dry-run` 只预览计划、`--port` 换审核端口、`--initial-mount` 指定头相机外参。检测参数见 [纯 CV 指南](docs/cv_detection.md)。
+## 使用边界
 
-需要重建六个源 Parquet 时，先通过审核，再执行 `python3 -m vive_correct rebuild --out outputs/cv --in-place`。覆盖前自动保留初始 `.bak`，支持失败回滚和重复执行；完整说明见 [审核与重建指南](docs/review_rebuild.md)。
+- 原点为 **50 × 30 mm 标签中心**，不是已标定的 Vive 内部原点；标签须与腕部设备刚性绑定。
+- 自动候选的图像左右不代表物理左右手；几何检查通过也不代表实测精度达标。
+- 默认头相机外参是安装近似，使用其他设备前应核对 [相机参数](calibrations/README.md)。当前识别输入固定为矫正左目，不能通过替换内参切换为眼动相机。
+- 审核和导出只写输出目录。只有显式执行 `rebuild --in-place` 才覆盖六个源 Parquet；数据集 `meta/` 不自动更新。
 
-## 模型识别（可选）
+## 文档导航
 
-```bash
-python3 -m vive_correct run --dataset /path/to/dataset --out outputs/demo
-```
+- [纯 CV 选帧](docs/cv_detection.md)：样本清单、扫描模式、检测调参与评估。
+- [审核与重建](docs/review_rebuild.md)：坐标轴校准、RRD 导出、源文件覆盖与恢复。
+- [运行与配置](vive_correct/README.md)：输入要求、可选模型路径及阶段产物。
+- [字段与接口](docs/observations_schema.md)：坐标约定、审核 schema 和预览接口。
+- [手部校准模型](docs/hand_pipeline.md)：刚性变换、缺失值处理与独立 MANUS 路径。
+- [Rerun 与深度输入](ego_data/README_rerun.md)：原始数据查看、两种深度元数据名称及所需字段。
+- [开发说明](docs/development.md)：模块职责、并发与数据约束、检查入口。
 
-默认 `--profile astra`。`--profile legacy` 走 API；`--open-rerun` / `--rerun` 导出录制。配置与产物见 [运行指南](vive_correct/README.md)。
-
-## 手部原始数据
-
-```bash
-python3 open_manus.py /path/to/episode   # MANUS / RGB / 点云预览（不应用标签修正）
-python3 open_file.py /path/to/episode    # 手动调腕部
-```
-
-详见 [Rerun 说明](ego_data/README_rerun.md)。结果另存，不改源数据。
-
-## 结果含义
-
-- 原点是 **50×30 mm 标签中心**，不是已标定的 Vive 内部原点。
-- 无安装方向参考时只输出中心，不生成设备坐标轴。
-- 重投影误差、检出率 ≠ 实测位置精度。
-- 固定世界平移仅对齐参考时刻，不能保证手腕转动后标签中心仍与修正原点重合。
-- 默认头相机外参是安装近似；同类左目设备可用 `--initial-mount` 指定外参。当前不支持切换到眼动相机完成识别与重建。
-- 自动结果默认未人工核验；交叉后的物理左右手需审核确认。
-
-## 文档
-
-- [运行指南](vive_correct/README.md)：输入、配置、模型路径、阶段与产物。
-- [纯 CV 指南](docs/cv_detection.md)：检测、调参和验证。
-- [审核与重建](docs/review_rebuild.md)：日常审核、RRD 导出、备份覆盖和排查。
-- [报告接口](docs/observations_schema.md)：坐标、字段与质量状态。
-- [手部流程](docs/hand_pipeline.md)：已有手点与 MANUS 重建的区别。
-- [开发说明](docs/development.md)：模块职责、数据约束与检查命令。
-- [模型对比实验](docs/experiments.md)：固定候选池复核对比。
+研究与历史记录：[手部安装标定](docs/hand_calibration.md)、[模型对比实验](docs/experiments.md)、[CV 历史验证](docs/cv_validation.md)。

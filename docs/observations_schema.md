@@ -1,90 +1,112 @@
-# 位姿交付接口
+# 字段与接口
 
-模型交付文件：`delivery/results/<样本>/observations.json`。表示指定帧上，腕部标签参考系相对矫正左目相机的位姿。不是完整轨迹，也不是已标定的 Vive 世界系位姿。
+本文定义坐标、人工审核记录和预览接口。操作步骤见 [审核指南](review_rebuild.md)，整段变换公式见 [校准模型](hand_pipeline.md#标签刚性绑定)。模型交付报告与人工审核依据包是不同 schema，不能仅凭同名 `observations.json` 混用。
 
-## 坐标契约
+## 坐标约定
 
-- 相机系：OpenCV，X 右、Y 下、Z 前，单位米
-- 左右手各自用设备固定参考系（由安装参考帧定方向），不按画面方向重定义
-- 原点：标签中心；Vive 内部原点是否已标定看状态字段
-- `T_camera_local`：按行 4×4，局部→相机；前三列为局部 XYZ 在相机系单位向量，第四列前三项为原点
-- 矩阵已含方向修正，勿再套历史旋转；不同帧的左右手 ≠ 同时刻相对位姿
+- 图像：矫正左目，左上角为原点，x 向右、y 向下，单位像素；四角按轮廓循环排列，q0 不保证是左上角。
+- 相机：OpenCV 右手系，X 右、Y 下、Z 前，位置单位米。
+- 标签原点：四角对角线交点对应的标签中心，不默认等于 Vive 内部原点。
+- `T_camera_local`：按行存储的 4 × 4 矩阵，将局部齐次列向量变换到相机系；前三列为 XYZ 单位轴，平移列与 `origin_camera_m` 一致。
+- `frame_index` 从 0 开始；`timestamp_s` 来自源 Parquet，不以帧号除 FPS 替代。左右手来自不同帧时，不能直接求同时刻相对位姿。
 
-## 顶层字段
+矩阵已包含方向修正，不能重复施加历史旋转。`axes_generated=false` 时 `T_camera_local` 为 `null`，可使用有效原点，但不可用单位旋转补全姿态。
 
-- `schema_version`：数据结构标识，供客户端兼容性检查。
-- `episode`、`video_key`：源样本路径与视频字段。源路径是追溯信息，换机器后不保证可访问。
-- `origin`：原点定义。
-- `camera_coordinates`、`pose_transform`：坐标与变换说明。
-- `camera`：`K` 为 3×3 内参；`resolution` 为 `[宽, 高]` 像素；`distortion` 说明图像已矫正。
-- `axis_length_m`：绘图轴长，当前 0.04 米；不是单位轴向量的长度。
-- `mode`：`both_hands_same_frame`、`separate_frames`、`single_hand` 或 `no_usable_label`。
-- `mount_calibration`：`accepted` 与 `reason`，表示安装标定结论。
-- `observations`：选中帧列表；无有效观测时为空。
-- `identity`、`reviewer_type`：身份来源。关闭模型复核时为 `cv_image_half_unverified` / `cv_only`，左右手仅为图像半区假设。
+## 人工审核记录：schema 3
 
-## 每帧字段
+`features/.../human_review.json` 保存 `selected.left/right`、审核人、输入绑定及版本信息。每侧记录参考帧、四角、备注、物理手侧、状态，以及：
 
-- `frame_index`：从 0 开始的帧索引。
-- `timestamp_s`：源视频 parquet 对应的时间戳，单位秒；用于同步，不应直接用帧号除以 FPS 替代。
-- `stickers`：按物理手侧 `left`、`right` 保存；没有观测的手侧不出现。
-
-## 每只手字段
-
-- `local_axes_convention`：`device_fixed_anchor` 表示设备固定参考轴，`unresolved` 表示没有可用安装方向；其他来源约定不能自动当作设备参考。
-- `origin_camera_m`：标签中心在相机系中的 `[x,y,z]`，单位米。安装方向未确认时仍保留通过几何拟合的原点。
-- `identity_source`：身份判断来源；`cv_image_half_unverified` 表示未经过模型或人工确认，`unknown` 表示历史报告没有记录来源。
-- `axes_generated`：是否生成完整参考坐标轴；不等于物理轴向已经验证。
-- `axes_failure_reason`：未生成原因，例如 `installation_reference_missing`（缺少安装参考）、`use_original_device_reference`（需提供统一换轴前的参考）；成功时为 `null`。
-- `T_camera_local`：最终位姿矩阵；`axes_generated=false` 时为 `null`，不得用单位旋转替代。
-- `quality_status`：`verified`、`conditional_motion`、`low_resolution_preview` 或 `unknown`；`verified` 仅表示观测检查通过，不代表物理标定通过。
-- `orientation_status`：沿用原方向状态，例如 `not_direction_reviewed`、`user_constraint_applied`、`reconstructed_pending_direction_review`、`model_uncertain`；`axes_not_generated` 表示仅有原点；未知状态不能当作已验证。
-- `rms_px`：角点重投影均方根误差，单位像素；不等于位置误差或物理轴向准确度。
-- `stability_passed`：稳定性检查结论。
-- `temporal_consistency_passed`：本次短时跟踪与位姿连续性检查结论。
-- `baseline_retained`：是否沿用历史观测；`true` 不表示本次重新确认。
-- `plane_ambiguous`：是否存在平面多解歧义。
-- `orientation_180_unresolved`：是否仍存在 180° 方向歧义。
-- `physical_axes_verified`：物理轴向是否已验证。
-- `true_vive_origin_calibrated`：Vive 内部原点是否已标定。
-
-验证与歧义字段为 `true` / `false` / `null`；`null` 表示缺失或未知，不得当作通过。`axes_generated`、`baseline_retained` 为布尔值。缺失的误差为 `null`。历史观测保留原质量状态，所以 `quality_status` 与本次时序结论可能不同。
-
-## 读取示例
-
-```python
-import json
-import numpy as np
-
-with open(report_path) as f:
-    report = json.load(f)
-
-for observation in report["observations"]:
-    for side, pose in observation["stickers"].items():
-        origin_m = np.asarray(pose["origin_camera_m"], dtype=float)
-        if not pose["axes_generated"]:
-            continue  # 可以使用原点；没有可用的 XYZ 轴或完整姿态。
-        T = np.asarray(pose["T_camera_local"], dtype=float)
-        x_axis, y_axis, z_axis = T[:3, 0], T[:3, 1], T[:3, 2]
-        # 使用 observation['timestamp_s'] 同步源数据。
-        # 依用途检查质量、方向和标定状态，不凭单一 verified 字段放行。
+```json
+{
+  "axis_angles_deg": [0, 0, 0],
+  "axis_convention": "intrinsic_XYZ_degrees"
+}
 ```
 
-## 使用限制
+角度必须是三个有限数，采用本地内禀 XYZ，`C = Rx(α) Ry(β) Rz(γ)`，右乘源腕部旋转。手动输入与四角校正使用相同字段；零角度表示恢复源方向。schema 2 加载时保留选择并默认零角度，必须重新审核。
 
-几何拟合通过但安装方向未确认时保留原点；标签身份仍需正常复核。仅原点结果不参与完整位姿时序检查、双手相对变换或安装标定。
+### 依据包
 
-完整位姿中的 `origin_camera_m` 与矩阵平移列一致。读取 `T_camera_local` 前先检查 `axes_generated`，不得用单位旋转补全缺失姿态。详细角点、复核记录和诊断保存在内部工作报告中。
+`features/.../approval.json` 指向 `<out>/approved/<版本>/`。使用前须校验审核修订、输入、计算代码、标定快照和文件哈希。
 
-固定轴跟踪结果及停止原因保存在内部报告 `device_tracks` 中。参考方向沿用用户约束，不代表 Vive 内部原点或安装关系已完成实测标定。
+- `human_review.json`：审核快照。
+- `observations.json`：参考帧、真实时间戳、四角、PnP 结果及最终姿态；`human_review_sha256`、`review_binding`、`input_signature` 用于追溯。
+- `wrist_alignment.json`：每侧本地校准、同步源姿态、深度结果和外参。
+- `camera_mount.json`：外参快照；原帧与 `*_quad.png` 保存四角及轴向叠图。
+- `bundle.json`：依据索引、审核人、版本、原始六文件及依据文件校验值。
+- `corrected_*/corrected_manifest.json`：导出或重建时生成，记录修正文件、哈希、行数和坐标组统计；`corrected_groups` 中的 `*_skipped` 为跳过数量。
 
-## 人工审核依据包
+### 校准与位姿字段
 
-人工审核使用 `<out>/approved/<版本>/` 下的独立依据，勿将它与模型交付报告混为一个 schema：
+- `model="wrist_local_rigid"`：`offset_local_m` 为腕部本地平移，`rotation_local` 为右乘本地旋转。`offset_m` 仅是参考时刻世界偏移，不可作为整段固定平移。历史 `model="world"` 走兼容路径。
+- `pnp_origin_camera_m`：PnP 原始中心；`origin_camera_m`：沿标签中心射线并经可用深度精修后的中心。
+- `rotation_camera_label`：用于中心求解的 PnP 标签平面旋转，不等于设备物理方向。
+- `T_camera_local`、`axis_projection`、`axis_length_m`、`camera_K`：最终姿态、投影、绘图轴长（0.04 m）与内参。投影含 `origin` 和按 X/Y/Z 排列的 `endpoints`；不可投影点为 `null`。
+- `calibration_sample`：同步源头部与腕部位姿、`T_world_camera`、`rotation_camera_source`、`rotation_camera_corrected`、本地校准和深度结果。
+- `local_axes_convention="source_wrist_with_local_calibration"`、`orientation_status="human_axis_review"`：源腕部叠加人工本地旋转。`physical_axes_verified=false` 表示未进行独立物理标定。
 
-- `observations.json`：参考帧、真实时间戳、人工四角、标签中心和 PnP 结果；`human_review_sha256`、`review_binding`、`input_signature` 用于追溯与过期检查。
-- `wrist_alignment.json`：每侧 `offset_m`、同步样本、原始腕部姿态、世界系目标位置、深度校验原因和相机外参。
-- `bundle.json`：版本、审核修订号、审核人、标定快照、六文件原始哈希及依据文件哈希。
-- `corrected_manifest.json`：共用修正 Parquet 的路径、校验值、行数和有效位置统计；在导出或重建时生成。
+## 浏览器接口
 
-`features/.../approval.json` 指向当前依据包，只有通过完整性与过期检查后才能使用。人工平移保留源旋转，不用缺失的标签姿态替代设备方向。操作见 [审核与重建指南](review_rebuild.md)。
+接口仅服务本机会话。POST 请求使用 `Content-Type: application/json` 和页面下发的 `X-Review-Token`。数据 `id` 由持久化目录分配，只追加，不随新结果或服务重启重排。
+
+### 只读轴向预览
+
+`POST /api/axis-preview?id=0`：
+
+```json
+{
+  "side": "left",
+  "frame_index": 100,
+  "quad": [[120, 262], [180, 262], [180, 298], [120, 298]],
+  "axis_angles_deg": [0, 0, 0],
+  "axis_convention": "intrinsic_XYZ_degrees"
+}
+```
+
+数值仅示意格式。成功返回单侧位姿、投影与 `calibration_sample`，并提供四角校正建议：
+
+- `corner_correction`：`axis_angles_deg`、`axis_convention`、`rotation_camera_target`、`geometry_convention`、`plane_ambiguous`、`physical_axes_verified`。
+- `geometry_convention="X_left_Y_up_Z_forward"`：在同一个 PnP 平面上选择最接近图像左／上及远离相机方向的正交右手系，不是设备朝向识别。
+- 建议无法生成时 `corner_correction=null`，原因在 `corner_correction_error`；有效的手动轴向预览仍可返回。
+
+四角或同步姿态无效时返回 HTTP 400 与 `error`。接口不写人工记录；仅点击“四角校正”才将建议角度应用到草稿。通过审核时重新计算，不信任客户端投影。
+
+### 列表与任务
+
+- `GET /api/status`：选帧进度 `scan`、列表版本 `list_version`、任务 `jobs`、整体运行标志及发现异常；前端每秒查询。
+- `GET /api/episodes`：轻量列表，版本变化时重新获取；列表状态不替代完整依据校验。
+- `GET /api/episode?id=…`：加载完整条目并校验依据。
+- `POST /api/review?id=…`：保存人工记录，校验 `binding` 与 `revision`。
+- `POST /api/approve?id=…`、`POST /api/export?id=…`：分别提交审核和导出，HTTP 202 仅表示任务已接受；完成或失败由 `jobs` 查询。
+
+新结果不覆盖草稿；旧请求响应必须按数据、手侧、帧和编辑版本隔离。同条排队或处理中的数据不能重复提交或修改。
+
+## 模型交付报告
+
+文件位于 `delivery/results/<样本>/observations.json`，描述选中帧上标签相对矫正左目相机的位姿，不是完整轨迹。
+
+### 顶层与每帧
+
+- `schema_version`、`episode`、`video_key`：结构版本和源信息；源路径换机器后不保证可访问。
+- `origin`、`camera_coordinates`、`pose_transform`：原点、坐标和变换说明。
+- `camera`：3 × 3 的 `K`、像素分辨率 `[宽, 高]` 和 `distortion`；`axis_length_m` 是绘图轴长，不是旋转矩阵列长。
+- `mode`：`both_hands_same_frame`、`separate_frames`、`single_hand` 或 `no_usable_label`。
+- `mount_calibration`：安装标定的 `accepted` 与 `reason`。
+- `identity`、`reviewer_type`：身份来源；`cv_image_half_unverified` / `cv_only` 表示图像半区假设，未经物理侧别确认。
+- `observations[]`：`frame_index`、`timestamp_s` 和 `stickers.left/right`；缺失手侧不出现，无有效观测时列表为空。
+
+### 每只手与质量状态
+
+位置和矩阵遵循上面的坐标约定。设备固定轴用 `local_axes_convention="device_fixed_anchor"`；缺少安装方向时为 `unresolved`，仍可保留有效中心。其他轴向约定不能自动当作设备参考。
+
+- `identity_source`：身份来源；历史缺失值为 `unknown`。
+- `axes_generated`、`axes_failure_reason`：是否生成完整轴及失败原因；生成不等于物理验证。
+- `quality_status`：`verified`、`conditional_motion`、`low_resolution_preview` 或 `unknown`；`verified` 仅表示观测检查通过。
+- `orientation_status`：方向审核状态；`axes_not_generated` 表示只有原点，其他状态保留来源含义，未知值不可当作通过。
+- `rms_px`：角点重投影 RMS，单位像素，不是三维位置误差。
+- `stability_passed`、`temporal_consistency_passed`：稳定性与本次时序检查。
+- `plane_ambiguous`、`orientation_180_unresolved`：平面多解和 180° 方向歧义。
+- `physical_axes_verified`、`true_vive_origin_calibrated`：独立物理轴向与 Vive 内部原点标定状态。
+- `baseline_retained`：沿用历史观测，不表示本次重新确认。
+
+验证或歧义字段的 `null` 表示未知，不是通过；缺失误差也为 `null`。历史质量状态与本次时序结论可能不同。只含原点的结果不得用于完整姿态检查、双手相对变换或安装标定。内部 `device_tracks` 保存固定轴跟踪与停止原因。
