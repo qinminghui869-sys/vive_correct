@@ -34,7 +34,7 @@
 - `wrist_alignment.json`：每侧本地校准、同步源姿态、深度结果和外参。
 - `camera_mount.json`：外参快照；原帧与 `*_quad.png` 保存四角及轴向叠图。
 - `bundle.json`：依据索引、审核人、版本、原始六文件及依据文件校验值。
-- `corrected_*/corrected_manifest.json`：导出或重建时生成，记录修正文件、哈希、行数和坐标组统计；`corrected_groups` 中的 `*_skipped` 为跳过数量。
+- `corrected_manifest.json`：导出或重建时生成，位于当前依据包目录，记录 `corrected_*/data/` 下的修正文件、哈希、行数和坐标组统计；`corrected_groups` 中的 `*_skipped` 为跳过数量。
 
 ### 校准与位姿字段
 

@@ -31,12 +31,14 @@
 
 ### 并发与响应
 
-默认并发：预览 4、图像编码 4、审核 2、RRD 导出 1。需要调整时显式传参：
+默认并发：预览 8、图像编码 8、审核 4、RRD 导出 1，共享缓存上限 2048 MiB。需要调整时显式传参：
 
 ```bash
 python3 -m vive_correct review --out outputs/cv \
-  --preview-jobs 4 --frame-jobs 4 --approve-jobs 2 --export-jobs 1
+  --preview-jobs 8 --frame-jobs 8 --approve-jobs 4 --export-jobs 1 --cache-mib 2048
 ```
+
+深度参考帧与有效掩码会复用，修改四角或通过审核时无需重复解码同一帧；首次读取较靠后的帧仍需等待。缓存按需占用内存，2 GiB 是缓存上限，不是进程总内存上限。资源紧张时降低预览／图像并发至 4、审核并发至 2，并设置 `--cache-mib 512`。更改参数后重启服务。
 
 审核与导出使用独立队列。同条数据排队或处理中不能修改、重复提交，其他数据仍可操作。服务重启后，未完成任务标记为中断，由用户重试，不自动提交。根据响应耗时、内存和磁盘负载调整并发；提高并发不改变检测预算、同步规则或 RRD 质量，也不保证提速。
 
@@ -56,27 +58,19 @@ RRD 与重建共用修正 Parquet，显示修正后的腕部 XYZ 轴和已有手
 
 ## 3. 重建六个文件
 
+基础命令与六个目标文件见 [快速开始](../README.md#3-按需重建六个文件)。重建不依赖 RRD，只处理审核依据有效的数据，单条失败不阻断其余数据。
+
+仅重建指定数据时：
+
 ```bash
-# 生成独立修正文件与校验报告
-python3 -m vive_correct rebuild --out outputs/cv
-
-# 显式覆盖源文件，覆盖前保存初始备份
-python3 -m vive_correct rebuild --out outputs/cv --in-place
-
-# 可追加 --episode /path/to/episode 仅处理指定数据
+python3 -m vive_correct rebuild --out outputs/cv --episode /path/to/episode
 ```
 
-只处理具有完整有效审核依据的数据，单条失败不阻断其余数据。`review`、`repair`、`rebuild` 均支持 `--initial-mount FILE`，应使用同一份外参。
-
-目标文件位于 `<episode>/data/chunk-000/episode_000000/`：
-
-- `observation.{left,right}_wrist_pose.parquet`：腕部位置和旋转。
-- `action.parquet`、`observation.state.parquet`：各自记录中的左右腕部字段。
-- `observation.hand_{left,right}_points.parquet`：已有世界坐标手点。
+`review`、`repair`、`rebuild` 均支持 `--initial-mount FILE`，应使用同一份外参。
 
 保留行数、行序、时间戳、字段类型、Arrow 元数据及非目标字段；缺失位姿或同步失败的坐标组保持原值并记录跳过数量。公式及详细规则见 [手部校准模型](hand_pipeline.md#标签刚性绑定)。
 
-重建不依赖先导出 RRD。需保留 `features/`、当前 `approved/<版本>/`、原始数据及标定；覆盖过源文件时还需保留初始 `.parquet.bak` 和 `<episode>/.vive_rebuild/`。仅有偏移 JSON 不足以重建。
+需保留 `features/`、当前 `approved/<版本>/`、原始数据及标定；覆盖过源文件时还需保留初始 `.parquet.bak` 和 `<episode>/.vive_rebuild/`。仅有偏移 JSON 不足以重建。
 
 ## 备份与恢复
 

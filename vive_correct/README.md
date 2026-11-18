@@ -16,7 +16,7 @@
 识别不回退到原始左目视频，视频分辨率须与标定一致。后续输入按阶段准备：
 
 - **轴向预览**：可同步的头部、对应腕部位姿及相机外参。
-- **通过审核／导出／重建**：完整的 [六个目标 Parquet](../docs/review_rebuild.md#3-重建六个文件)，审核时即校验其结构。
+- **通过审核／导出／重建**：完整的 [六个目标 Parquet](../README.md#3-按需重建六个文件)，审核时即校验其结构。
 - **完整深度 RRD**：额外准备深度、掩码、元数据及眼动输入，见 [RRD 说明](../ego_data/README_rerun.md#完整-rrd-的输入)。
 
 `eye_rgb` 仅用于 RRD 眼动展示。`--initial-mount` 指定矫正左相机到头部的外参，不改变识别输入相机，详见 [相机参数](../calibrations/README.md)。
@@ -29,7 +29,7 @@
 - `astra`：默认模型路径，通过已登录的 Codex CLI 调用仓库配置的 `gpt-6-astra`，默认 `--stage all`。
 - `legacy`：API 模型路径，需配置 `openai.local.json` 或环境变量。
 
-显式命令行参数覆盖预设。各类默认值只在配置文件维护：
+显式命令行参数覆盖预设。检测与模型默认值见以下配置：
 
 - [run.yaml](config/run.yaml)：模型通道、并发与搜索参数。
 - [cv.yaml](config/cv.yaml)：CV 检测、选帧预算与跟踪参数。
@@ -37,6 +37,8 @@
 - [batch.yaml](config/batch.yaml)：批处理与复核参数。
 
 `scripts/run_cv.sh` 固定使用 `cv`，默认数据级并发为 4；直接运行 `run --profile cv` 的并发取配置预设。批量运行建议显式指定 `--jobs`。
+
+审核服务的并发与缓存由独立 CLI 参数控制，见 [并发与响应](../docs/review_rebuild.md#并发与响应)。
 
 常用参数：`--episodes-file FILE` 限定样本；`--dry-run` 预览 `all/features` 计划，不调用模型或生成检测结果；`--initial-mount FILE` 指定外参。CV 扫描与调参见 [纯 CV 指南](../docs/cv_detection.md)。
 

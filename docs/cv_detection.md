@@ -18,11 +18,7 @@ bash scripts/run_cv.sh /path/to/dataset outputs/cv_tracked \
   --stage all --feature-search full --jobs 4
 ```
 
-清单是相对数据集根目录的路径数组，例如：
-
-```json
-["desk/episode_a", "dining/episode_b"]
-```
+清单格式见 [指定样本示例](../README.md#只处理指定样本)，路径相对本次数据集根目录填写。
 
 省略 `--episodes-file` 处理全部样本；加 `--dry-run` 只预览计划。`--max-frames 120` 将视频限制为前 120 帧，仅适合短片冒烟测试，区别于快速模式在全时段内最多检测 120 帧。
 
