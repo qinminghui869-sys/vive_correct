@@ -16,6 +16,8 @@ python3 -m pip install -r requirements.txt
 
 ## 快速开始
 
+首次操作请看 [人工审核上手指南](docs/user_guide.md)：以 desk 数据演示启动、检查、修改、审核和导出，附真实界面截图。
+
 选帧与审核使用同一输出目录，可同时运行，也可先选完再审核。
 
 ```bash
