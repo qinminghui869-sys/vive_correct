@@ -85,6 +85,14 @@ class MemoryCache:
             with self.lock:
                 self.pending.pop(pending_key, None)
 
+    def resize(self, limit):
+        if limit <= 0:
+            raise ValueError("缓存大小必须为正数")
+        with self.lock:
+            self.limit = limit
+            while self.values and self.size > limit:
+                self.size -= self.values.popitem(last=False)[1][1]
+
     def clear(self):
         with self.lock:
             self.values.clear()

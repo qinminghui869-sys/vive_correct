@@ -76,6 +76,30 @@ def plane_center(depth_m, valid_mask, corners, intrinsics, ray):
     )
 
 
+def depth_frame(episode, annotation, index):
+    """Reuse exact decoded depth/mask pixels across corner edits and approval."""
+    from vive_correct.runtime_cache import CACHE, file_stamp
+
+    video = episode / "videos/chunk-000" / DEPTH_KEY / "episode_000000.mp4"
+    mask_video = annotation / "valid_mask_ffv1.mkv"
+    stamps = (file_stamp(video), file_stamp(mask_video))
+
+    def read():
+        with av.open(str(video)) as dc, av.open(str(mask_video)) as mc:
+            # Count decoded frames as before: no FPS-based seeking or timestamp approximation.
+            for number, (df, mf) in enumerate(zip(dc.decode(video=0), mc.decode(video=0))):
+                if number == index:
+                    depth = df.to_ndarray().astype(float) / 1000
+                    mask = mf.to_ndarray()
+                    return depth, mask[:, :, 0] if mask.ndim == 3 else mask
+        raise ValueError("Depth frame unavailable")
+
+    result = CACHE.get(("depth_frame", stamps, index), read)
+    if stamps != (file_stamp(video), file_stamp(mask_video)):
+        raise ValueError("Depth inputs changed during decoding")
+    return result
+
+
 def refine_targets(episode, report):
     data = episode / "data/chunk-000/episode_000000"
     ann = episode / "annotation/chunk-000" / DEPTH_KEY / "episode_000000"
@@ -97,41 +121,30 @@ def refine_targets(episode, report):
             if abs(times[index] - o["timestamp_s"]) > 0.005:
                 raise ValueError("RGB-depth timestamp gap exceeds 5 ms")
             selected.setdefault(index, []).append(o)
-        with (
-            av.open(str(episode / "videos/chunk-000" / DEPTH_KEY / "episode_000000.mp4")) as dc,
-            av.open(str(ann / "valid_mask_ffv1.mkv")) as mc,
-        ):
-            for index, (df, mf) in enumerate(zip(dc.decode(video=0), mc.decode(video=0))):
-                if index in selected:
-                    depth = df.to_ndarray().astype(float) / 1000
-                    mask = mf.to_ndarray()
-                    mask = mask[:, :, 0] if mask.ndim == 3 else mask
-                    for o in selected[index]:
-                        for side, label in o["stickers"].items():
-                            key = (o["frame_index"], side)
-                            try:
-                                original = np.asarray(label["origin_camera_m"], float)
-                                target, quality = plane_center(
-                                    depth,
-                                    (mask > 0) & (depth <= meta["max_depth_m"]),
-                                    label["image_corners_px"],
-                                    k,
-                                    original,
-                                )
-                                result[key] = dict(
-                                    status="depth_plane_refined",
-                                    origin_camera_m=target.tolist(),
-                                    original_origin_camera_m=original.tolist(),
-                                    depth_shift_m=float(target[2] - original[2]),
-                                    quality=quality,
-                                    anatomical_accuracy_validated=False,
-                                )
-                            except (ValueError, KeyError) as error:
-                                result[key] = dict(
-                                    status="unverified_pnp_preview", reason=str(error)
-                                )
-                if index >= max(selected):
-                    break
+        for index, items in selected.items():
+            depth, mask = depth_frame(episode, ann, index)
+            for o in items:
+                for side, label in o["stickers"].items():
+                    key = (o["frame_index"], side)
+                    try:
+                        original = np.asarray(label["origin_camera_m"], float)
+                        target, quality = plane_center(
+                            depth,
+                            (mask > 0) & (depth <= meta["max_depth_m"]),
+                            label["image_corners_px"],
+                            k,
+                            original,
+                        )
+                        result[key] = dict(
+                            status="depth_plane_refined",
+                            origin_camera_m=target.tolist(),
+                            original_origin_camera_m=original.tolist(),
+                            depth_shift_m=float(target[2] - original[2]),
+                            quality=quality,
+                            anatomical_accuracy_validated=False,
+                        )
+                    except (ValueError, KeyError) as error:
+                        result[key] = dict(status="unverified_pnp_preview", reason=str(error))
     except (OSError, ValueError, KeyError) as error:
         for o in observations:
             for side in o["stickers"]:

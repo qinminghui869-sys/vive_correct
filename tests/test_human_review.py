@@ -513,7 +513,7 @@ class ServerTests(unittest.TestCase):
                 read_json(other / "features/sample/features.json"),
             )
         store = ReviewStore(self.output)
-        server = ReviewServer(self.output, 0, self.mount)
+        server = ReviewServer(self.output, 0, self.mount, approve_jobs=2)
         self.addCleanup(server.server_close)
         entered = [threading.Event(), threading.Event()]
         release = threading.Event()

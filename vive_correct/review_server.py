@@ -42,13 +42,17 @@ class ReviewServer(ThreadingHTTPServer):
         port=DEFAULT_PORT,
         calibration=DEFAULT_MOUNT,
         *,
-        approve_jobs=2,
+        approve_jobs=4,
         export_jobs=1,
-        preview_jobs=4,
-        frame_jobs=4,
+        preview_jobs=8,
+        frame_jobs=8,
+        cache_mib=2048,
     ):
         if min(approve_jobs, export_jobs, preview_jobs, frame_jobs) < 1:
             raise ValueError("并发数必须为正整数")
+        if cache_mib <= 0:
+            raise ValueError("--cache-mib 必须为正整数")
+        CACHE.resize(cache_mib * 1024 * 1024)
         self.store = ReviewStore(output, allow_empty=True)
         self.calibration = Path(calibration)
         self.token = secrets.token_urlsafe(32)
@@ -410,10 +414,11 @@ def main(argv=None):
     parser.add_argument("--out", type=output_directory, required=True)
     parser.add_argument("--port", type=int, default=DEFAULT_PORT)
     parser.add_argument("--initial-mount", type=Path, default=DEFAULT_MOUNT)
-    parser.add_argument("--approve-jobs", type=int, default=2)
+    parser.add_argument("--approve-jobs", type=int, default=4)
     parser.add_argument("--export-jobs", type=int, default=1)
-    parser.add_argument("--preview-jobs", type=int, default=4)
-    parser.add_argument("--frame-jobs", type=int, default=4)
+    parser.add_argument("--preview-jobs", type=int, default=8)
+    parser.add_argument("--frame-jobs", type=int, default=8)
+    parser.add_argument("--cache-mib", type=int, default=2048, help="共享缓存上限（MiB）")
     args = parser.parse_args(argv)
     if not 1 <= args.port <= 65535:
         parser.error("--port 必须在 1–65535 之间")
@@ -426,6 +431,7 @@ def main(argv=None):
             export_jobs=args.export_jobs,
             preview_jobs=args.preview_jobs,
             frame_jobs=args.frame_jobs,
+            cache_mib=args.cache_mib,
         )
     except OSError as error:
         parser.exit(

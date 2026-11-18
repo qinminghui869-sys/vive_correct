@@ -48,6 +48,17 @@ class LiveReviewTests(unittest.TestCase):
         self.addCleanup(server.server_close)
         return server
 
+    def test_cache_resize_evicts_without_changing_returned_values(self):
+        cache = MemoryCache(limit=10000)
+        cache.get("first", lambda: bytes(1000))
+        cache.get("second", lambda: bytes(1000))
+        cache.resize(1500)
+        self.assertLessEqual(cache.size, 1500)
+        self.assertNotIn("first", cache.values)
+        self.assertEqual(cache.get("second", lambda: self.fail("unexpected reload")), bytes(1000))
+        with self.assertRaises(ValueError):
+            cache.resize(0)
+
     def test_cache_merges_misses_without_serializing_other_keys(self):
         cache = MemoryCache()
         entered, release = threading.Event(), threading.Event()
