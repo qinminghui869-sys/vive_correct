@@ -1,118 +1,106 @@
-# 审核、导出与重建
+# 导出、重建与排错
 
-本文面向纯 CV 流程的操作人员。安装见 [项目首页](../README.md)，选帧模式见 [纯 CV 指南](cv_detection.md)。以下命令在项目根目录执行，`outputs/cv` 为同一批次的输出目录，须与源数据目录隔离。
+本页适用于两种坐标模式。界面操作见 [人工审核指南](user_guide.md)，首次运行见 [快速开始](../README.md#快速开始)。以下以 `outputs/headband` 为例；眼动模式替换为自己的输出目录。后续命令自动继承已保存的模式。
 
-## 启动方式
+## 启动与续用
 
-启动命令见 [快速开始](../README.md#快速开始)。选帧和审核使用同一 `--out`，支持两种顺序：
-
-- **边选边审**：审核服务可先启动并等待；单条选帧完成后，正常情况下两秒内加入列表。
-- **先选后审**：选帧结束后再启动审核，加载已有候选、人工记录与导出状态。
-
-新结果不会切换当前数据或覆盖草稿；选帧停止不影响已发布结果。服务仅监听本机，默认端口 18763；端口占用时加 `--port 18774`。续跑使用原命令，更改检测配置使用新输出目录。
-
-## 1. 通过审核
-
-1. 核对左右手参考图、标签四角与物理手侧。出现“外壳范围不确定”时重点检查设备身份；缺少候选时可展开编辑区换帧或手工补标。
-2. 检查红 X、绿 Y、蓝 Z 轴；需要时调整四角或轴向。
-3. 填写审核人，点击 **通过审核**。服务端重新计算并保存依据，成功后才显示已通过。
-
-**仅暂存**可保存未完成的编辑，不代表审核通过。四角不完整、几何求解失败或同步姿态缺失时可暂存，但不能通过审核。**通过审核**不自动导出 RRD。
-
-### 坐标轴校准
-
-原点为四角对角线交点对应的标签中心，深度采用 PnP 与可用深度精修。初始方向来自同步源腕部姿态，经头部姿态和相机外参投影，默认轴长 4 cm。
-
-- **手动旋转**：输入角度、拖动滑条或使用 ±90° 按钮，按本地内禀 XYZ 顺序调整，保持正交右手系。
-- **按四角校正方向**：用当前四角求解标签平面，选择投影最接近 X 向左、Y 向上、Z 远离相机的右手系，生成本地旋转角。矩形不能唯一识别设备物理朝向，须人工核对，可继续微调。
-- **恢复源方向**：将本地旋转角归零。
-
-修改四角会更新中心；若要重新按四角求方向，须再次点击校正。调轴不移动中心。换帧保留该物理手侧的旋转角；交换左右选择时，旋转角仍归属原物理手侧。旧 schema 2 记录保留选帧、四角和备注，旋转默认为零，须重新审核。
-
-### 并发与响应
-
-默认并发：预览 8、图像编码 8、审核 4、RRD 导出 1，共享缓存上限 2048 MiB。需要调整时显式传参：
+选帧和审核使用同一 `--out`，可边选边审或先选后审：
 
 ```bash
-python3 -m vive_correct review --out outputs/cv \
-  --preview-jobs 8 --frame-jobs 8 --approve-jobs 4 --export-jobs 1 --cache-mib 2048
+python3 -m vive_correct review --out outputs/headband
 ```
 
-深度参考帧与有效掩码会复用，修改四角或通过审核时无需重复解码同一帧；首次读取较靠后的帧仍需等待。缓存按需占用内存，2 GiB 是缓存上限，不是进程总内存上限。资源紧张时降低预览／图像并发至 4、审核并发至 2，并设置 `--cache-mib 512`。更改参数后重启服务。
+服务仅监听本机，默认端口 18763；占用时加 `--port 18774`。新结果自动加入列表，不切换当前样本或覆盖草稿；选帧结束不影响审核。
 
-审核与导出使用独立队列。同条数据排队或处理中不能修改、重复提交，其他数据仍可操作。服务重启后，未完成任务标记为中断，由用户重试，不自动提交。根据响应耗时、内存和磁盘负载调整并发；提高并发不改变检测预算、同步规则或 RRD 质量，也不保证提速。
+左目模式使用自定义 `--initial-mount FILE` 时，审核、导出和重建应保持同一份外参。眼动模式继承选帧时的眼动标定，不使用该参数。更换模式、输入、标定或计算配置应新建输出目录。
 
-## 2. 按需导出 RRD
+## 导出 RRD
 
-页面点击 **导出 RRD 文件**；也可批量导出已审核数据：
+通过审核后，点击页面的 **导出 RRD 文件**，或批量导出有效的已审核数据：
 
 ```bash
-python3 -m vive_correct repair --out outputs/cv --export-jobs 1
-# 导出完成后查看
-python3 -m vive_correct view outputs/cv
+python3 -m vive_correct repair --out outputs/headband --export-jobs 1
+python3 -m vive_correct view outputs/headband
 ```
 
-未审核、依据过期或页面有未保存修改时不能直接导出。“排队中／生成中”不是完成状态；首次导出需要逐帧渲染。
+未审核、依据过期或存在未保存编辑时不能直接导出。排队、处理中和失败都不代表完成；审核成功也不会自动导出。
 
-RRD 与重建共用修正 Parquet，显示修正后的腕部 XYZ 轴和已有手点，不重建手型、不重复施加校准。深度输入不足时使用 RGB 路径；输入要求见 [RRD 说明](../ego_data/README_rerun.md#完整-rrd-的输入)。
+RRD 直接读取与重建共用的修正 Parquet，避免重复校准。左目模式支持原世界中的修正前后对照及可用深度；眼动模式展示固定参考世界中的 Vive、手骨架、轨迹、同步眼动视频和参考帧叠图。展示范围及输入要求见 [Rerun 说明](../ego_data/README_rerun.md)。
 
-## 3. 重建六个文件
+## 重建 Parquet
 
-基础命令与六个目标文件见 [快速开始](../README.md#3-按需重建六个文件)。重建不依赖 RRD，只处理审核依据有效的数据，单条失败不阻断其余数据。
-
-仅重建指定数据时：
+重建不依赖 RRD，只处理审核依据有效的数据，单条失败不阻断其余样本：
 
 ```bash
-python3 -m vive_correct rebuild --out outputs/cv --episode /path/to/episode
+# 独立输出，保留源数据
+python3 -m vive_correct rebuild --out outputs/headband
+
+# 仅处理指定样本
+python3 -m vive_correct rebuild --out outputs/headband --episode /path/to/episode
+
+# 显式覆盖源数据，自动备份并登记事务
+python3 -m vive_correct rebuild --out outputs/headband --in-place
 ```
 
-`review`、`repair`、`rebuild` 均支持 `--initial-mount FILE`，应使用同一份外参。
+目标为每条数据 `data/chunk-000/episode_000000/` 下的六个文件：
 
-保留行数、行序、时间戳、字段类型、Arrow 元数据及非目标字段；缺失位姿或同步失败的坐标组保持原值并记录跳过数量。公式及详细规则见 [手部校准模型](hand_pipeline.md#标签刚性绑定)。
+- `observation.left_wrist_pose.parquet`、`observation.right_wrist_pose.parquet`：左右 Vive 位姿。
+- `action.parquet`、`observation.state.parquet`：其中的左右腕部字段。
+- `observation.hand_left_points.parquet`、`observation.hand_right_points.parquet`：左右 21 关节手点。
 
-需保留 `features/`、当前 `approved/<版本>/`、原始数据及标定；覆盖过源文件时还需保留初始 `.parquet.bak` 和 `<episode>/.vive_rebuild/`。仅有偏移 JSON 不足以重建。
+两种模式均保留行数、行序、时间戳、字段类型和非目标字段。左目模式的无效坐标组保留原值；眼动模式输出 NaN 并保留原 null 掩码，避免新旧世界坐标混合。眼动 `action/state` 只变换已验证映射的腕部字段，其他字段仍在原坐标系。公式、同步和保真规则见 [校准模型](hand_pipeline.md)。
+
+保留 `features/`、当前 `approved/<版本>/`、原始数据和标定；覆盖源文件后还应保留初始 `.parquet.bak` 及 `<episode>/.vive_rebuild/`。仅有变换 JSON 不足以重建。
 
 ## 备份与恢复
 
-覆盖前先生成并校验全部六个文件，再备份、登记事务和替换；全部校验成功才发布完成状态。失败回滚到本次执行前版本，中断后在下次操作时恢复。
+覆盖前先生成并校验六个修正文件，再备份、登记事务和替换；全部校验成功才发布完成状态。失败回滚到本次执行前版本，中断在下次操作时恢复。
 
-初始备份永不覆盖，重复重建始终从备份计算，避免累积修正。项目登记的覆盖不使审核过期，RRD 可从备份读取原始对照。遇到未登记备份、备份损坏或外部修改时停止该条并报告冲突；应排查原因，不要删除备份或登记信息绕过检查。
+初始备份永不覆盖，重复重建始终从原始基线计算，避免累积修正。项目登记的覆盖不使审核依据过期。遇到未登记备份、备份损坏或外部修改时停止该条并报告冲突；不要删除备份或登记信息绕过检查。
 
 ## 数据集元数据
 
-当前仅修正上述六个 Parquet，**不修改 `observation.hand_skeleton.parquet`，不自动更新 `meta/`**。Arrow schema 元数据与数据集 `meta/` 相互独立。
+重建不修改 `observation.hand_skeleton.parquet`，也不自动更新数据集 `meta/`。眼动模式更新修正文件中的 Arrow 坐标系元数据，与数据集 `meta/` 相互独立。
 
-用于训练或完整数据集交付时，按原数据集统计口径同步：
+用于训练或数据集交付时，需按原统计口径重算 `episodes_stats.jsonl` 中修改维度的统计量。字段结构、行数和时间戳不变时，`info.json`、`episodes.jsonl` 与时间对齐记录无需修改；保留原相机标定，并由审核依据包记录腕部修正。若 `readme.json` 记录文件大小或数量，应同步刷新。
 
-- `episodes_stats.jsonl`：重算修改维度的 `min/max/mean/std`，`count` 保持原口径；另行修改 `hand_skeleton` 时也需更新其统计。
-- `info.json`、`episodes.jsonl` 和时间对齐记录：字段结构、行数、时间戳不变时无需修改。
-- `calibrations.jsonl`：保留原相机标定；腕部修正由审核依据包记录。
-- `readme.json`：若包含文件总大小或数量，按原口径刷新。
+旧统计不影响 RRD 显示，但可能影响训练归一化。当前备份和事务不包含这些 JSON；扩展元数据写入须纳入事务。
 
-旧统计量不影响 RRD 显示，但可能影响训练归一化。当前备份和回滚不包含上述 JSON；若扩展元数据写入，需纳入同一事务。
+## 并发与响应
+
+默认预览 8、图像编码 8、审核 4、RRD 导出 1，共享缓存上限 2048 MiB：
+
+```bash
+python3 -m vive_correct review --out outputs/headband   --preview-jobs 8 --frame-jobs 8 --approve-jobs 4 --export-jobs 1 --cache-mib 2048
+```
+
+首次解码较靠后的帧可能较慢，后续操作复用图像、几何及姿态缓存。资源紧张时降低并发及 `--cache-mib`；缓存上限不等于进程总内存上限。参数修改后重启服务。
+
+审核与导出队列独立。同条数据处理中禁止修改或重复提交，其他数据仍可审核。服务重启后，未完成任务标记为中断，需人工重试；提高并发不改变选帧预算或输出质量。
 
 ## 产物与排查
 
 ```text
 <out>/
-├── feature_progress.json                 # 选帧进度与失败原因
-├── review_catalog.json                   # 持久化编号，只追加不重排
-├── features/<场景>/<样本>/
-│   ├── features.json                     # 自动候选与输入来源
-│   ├── human_review.json                 # 人工选择与草稿
-│   ├── review_job.json                   # 审核／导出任务状态与耗时
-│   └── approval.json                     # 当前依据包指针
-├── approved/<版本>/                      # 原帧、叠图、位姿、标定与校验值
-├── repairs/<运行>/rerun/                  # 录制、统计与 render.log
-├── repair_manifest.json                  # 导出结果
-└── rebuild_manifest.json                 # 重建结果
+├── feature_plan.json / feature_progress.json  # 选帧配置、输入与进度
+├── review_catalog.json                       # 稳定样本编号
+├── features/<样本路径>/
+│   ├── features.json / human_review.json     # 候选与人工记录
+│   ├── review_job.json                       # 任务状态
+│   └── approval.json                         # 当前依据包指针
+├── approved/<版本>/                          # 图像、变换、标定、修正文件与哈希
+├── repairs/<运行>/rerun/                      # 录制、统计与 render.log
+├── rerun/manifest.json                       # 录制索引
+├── repair_manifest.json                      # 导出结果
+└── rebuild_manifest.json                     # 重建结果
 ```
 
-- **一直等待**：确认两个命令的 `--out` 一致，查看选帧进度与异常列表。
-- **画面有标签但没有候选**：按 [漏检排查](cv_detection.md#漏检排查) 区分未采样与过滤拒绝，必要时手工补标。
-- **依据过期或版本冲突**：重新加载该条，核对修改后再次审核。输入、人工选择、标定或计算代码变化会使依据失效。
-- **四角或同步失败**：根据提示换帧、补角点或检查姿态时间戳；未完成编辑可先暂存。
-- **重投影误差超限**：按提示的手侧和帧号放大检查白标签四角，必要时重选清晰帧，不通过提高阈值强行放行。
-- **导出失败**：查看对应 `render.log`，修复原因后重试；完整且未变化的产物会复用。
+- **一直等待**：检查选帧和审核的 `--out` 是否一致，以及选帧进度和异常列表。
+- **没有候选或误检**：按 [漏检排查](cv_detection.md#漏检排查) 检查采样与过滤原因，必要时换帧或手工补标。无有效共同帧的眼动样本保持待处理。
+- **换帧后标注消失**：眼动模式会清除另一帧的标注，双手需在新的共同帧重新检查，详见 [调整规则](user_guide.md#2-调整四角与方向)。
+- **几何或同步失败**：核查标签四角、清晰度及位姿时间戳；不要提高阈值强行放行。
+- **设备映射或安装不一致**：检查 `deviceN_*`、源腕部、重命名记录及 point／骨架关系；不能按图像左右自动交换源文件。
+- **依据过期或版本冲突**：重新加载并核查；输入或配置已变化时使用新输出目录。
+- **导出失败**：查看 `render.log`，修复原因后重试；完整且未变化的产物会复用。
 
-依据包字段见 [字段与接口](observations_schema.md)，内部约束见 [开发说明](development.md)。
+依据文件和 API 结构见 [字段与接口](observations_schema.md)，事务与缓存约束见 [开发说明](development.md)。
