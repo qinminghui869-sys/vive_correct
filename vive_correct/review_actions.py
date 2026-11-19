@@ -15,6 +15,7 @@ from vive_correct.rerun_export import DEFAULT_MOUNT, export_recordings
 from vive_correct.review_bundle import load_bundle, stage_files
 from vive_correct.review_io import atomic_json, merge_rows, output_lock, read_json
 from vive_correct.source_data import apply_files, baseline_read
+from vive_correct.review_exclusions import skipped
 
 
 def export_approved(store, index, calibration, progress=None):
@@ -109,22 +110,26 @@ def rebuild(output, calibration=DEFAULT_MOUNT, *, in_place=False, episode=None):
         row = dict(index=index, status="failed")
         try:
             with operation_lock(store.path(index).parent), output_lock(store.path(index).parent):
-                source = Path(store.load(index)["episode"])
-                row["episode"] = str(source)
-                with baseline_read(source):
-                    bundle = load_bundle(store, index, calibration)
-                    prepared = stage_files(bundle)
-                row.update(files=prepared["files"], status="prepared")
-                if in_place:
-                    row.update(
-                        apply_files(
-                            source,
-                            prepared["files"],
-                            bundle["baseline_hashes"],
-                            bundle["directory"],
+                state = store.load(index)
+                if state["exclusion"]:
+                    row.update(skipped(state, index))
+                else:
+                    source = Path(state["episode"])
+                    row["episode"] = str(source)
+                    with baseline_read(source):
+                        bundle = load_bundle(store, index, calibration)
+                        prepared = stage_files(bundle)
+                    row.update(files=prepared["files"], status="prepared")
+                    if in_place:
+                        row.update(
+                            apply_files(
+                                source,
+                                prepared["files"],
+                                bundle["baseline_hashes"],
+                                bundle["directory"],
+                            )
                         )
-                    )
-                row["in_place"] = in_place
+                    row["in_place"] = in_place
         except Exception as error:
             row.update(status="failed", error=str(error))
         rows.append(row)
@@ -132,7 +137,7 @@ def rebuild(output, calibration=DEFAULT_MOUNT, *, in_place=False, episode=None):
             merge_rows(store.output / "rebuild_manifest.json", {row.get("episode")}, [row])
     return {
         "status": "complete"
-        if all(r["status"] in ("prepared", "complete") for r in rows)
+        if all(r["status"] in ("prepared", "complete", "excluded") for r in rows)
         else "incomplete",
         "entries": rows,
     }

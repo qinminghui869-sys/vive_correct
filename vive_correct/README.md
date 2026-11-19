@@ -16,7 +16,7 @@
 识别不回退到原始左目视频，视频分辨率须与标定一致。后续输入按阶段准备：
 
 - **轴向预览**：可同步的头部、对应腕部位姿及相机外参。
-- **通过审核／导出／重建**：完整的 [六个目标 Parquet](../README.md#3-按需重建六个文件)，审核时即校验其结构。
+- **通过审核／导出／重建**：完整的 [六个目标 Parquet](../docs/review_rebuild.md#重建与备份)，审核时即校验其结构。
 - **完整深度 RRD**：额外准备深度、掩码、元数据及眼动输入，见 [RRD 说明](../ego_data/README_rerun.md#完整-rrd-的输入)。
 
 `eye_rgb` 仅用于 RRD 眼动展示。`--initial-mount` 指定矫正左相机到头部的外参，不改变识别输入相机，详见 [相机参数](../calibrations/README.md)。
@@ -63,6 +63,7 @@ python3 -m vive_correct run --dataset /path/to/dataset \
 <out>/
 ├── run_plan.json、feature_plan.json   # 运行计划与输入绑定，按路径生成
 ├── features/                         # CV 候选、图片和人工记录
+├── rejected_episodes.json             # 整条不通过的路径清单
 ├── estimates/                        # 估计与可选 CV 跟踪
 ├── search/、search_refined/           # 模型路径粗扫与补扫
 ├── qwen_reviews/                     # 模型复核（沿用历史目录名）

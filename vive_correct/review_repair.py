@@ -30,6 +30,7 @@ from vive_correct.review_io import (
 )
 from vive_correct.source_data import DATA, original_path
 from vive_correct.task_locks import operation_lock
+from vive_correct.review_exclusions import FILENAME, skipped
 
 
 def write_corrected_wrists(episode, destination, alignment):
@@ -97,7 +98,7 @@ def repair_dataset(
     targets = list(range(len(store.paths))) if indices is None else list(dict.fromkeys(indices))
     for index in targets:
         store.path(index)
-    if any(
+    if (store.output / FILENAME).exists() or any(
         store.path(i).with_name("approval.json").exists()
         or (
             store.path(i).with_name("human_review.json").exists()
@@ -110,6 +111,8 @@ def repair_dataset(
         def export_one(i):
             try:
                 state = store.load(i)
+                if state["exclusion"]:
+                    return skipped(state, i)
                 if state["status"] != "ready":
                     return dict(
                         index=i,
@@ -129,7 +132,9 @@ def repair_dataset(
         with ThreadPoolExecutor(max_workers=export_jobs) as pool:
             rows = list(pool.map(export_one, targets))
         return dict(
-            status="complete" if all(r["status"] == "complete" for r in rows) else "incomplete",
+            status="complete"
+            if all(r["status"] in ("complete", "excluded") for r in rows)
+            else "incomplete",
             entries=rows,
         )
     mount = read_json(Path(calibration).resolve())

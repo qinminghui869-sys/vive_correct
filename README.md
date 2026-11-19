@@ -1,16 +1,12 @@
 # Vive Correct
 
-从矫正左目视频识别腕部标签，经浏览器人工审核后，校准整段腕部位姿和已有手点，并导出 Rerun 录制（RRD）。默认推荐纯 CV 流程，无需模型密钥。
+基于矫正左目视频识别腕部标签，经人工审核后修正整段腕部位姿和手部关节点，输出 Parquet 与 Rerun 录制（RRD）。默认使用 OpenCV，无需模型服务或密钥。
 
-流程：**选帧 → 人工审核 → 按需导出 RRD／重建 Parquet**。选帧与审核可并行，导出由人工触发。
+流程：**选帧 → 人工审核 → 导出／重建**。不通过的数据记录到 `rejected_episodes.json`，跳过后续处理。
 
 ## 环境准备
 
-需要 Python 3.10+。以下命令均在项目根目录执行；数据应满足 [输入要求](vive_correct/README.md#输入要求)。
-
-建议 **16 个逻辑 CPU、32 GiB 内存**，适合同时选帧、审核和单任务导出。**8 个逻辑 CPU、16 GiB 内存**也可运行，但多任务同时计算可能需要等待；满负载内存峰值尚未测量。
-
-环境已配置时可跳过安装，直接使用可用的 `python3`；新环境建议创建虚拟环境：
+需要 Python 3.10+；输入目录结构见 [输入要求](vive_correct/README.md#输入要求)。在仓库根目录执行：
 
 ```bash
 python3 -m venv .venv
@@ -18,81 +14,69 @@ source .venv/bin/activate
 python3 -m pip install -r requirements.txt
 ```
 
-## 快速开始
+已有可用环境可跳过安装。使用虚拟环境时，每个终端都需激活。
 
-首次操作请看 [人工审核上手指南](docs/user_guide.md)：以 desk 数据演示启动、检查、修改、审核和导出，附真实界面截图。
+## 快速开始
 
 ### 1. 选帧与审核
 
-将 `/path/to/dataset` 替换为数据目录。两个终端使用同一输出目录，可边选边审，也可先选完再审核。使用虚拟环境时，在每个新终端执行 `source .venv/bin/activate`。
+终端 A：将 `/path/to/stove` 替换为数据目录，默认处理其下全部样本。
 
 ```bash
-# 终端 A：选帧
-bash scripts/run_cv.sh /path/to/dataset outputs/cv --jobs 4
+bash scripts/run_cv.sh /path/to/stove outputs/stove_review --jobs 4
 ```
+
+终端 B：使用同一输出目录启动审核，可边选边审。
 
 ```bash
-# 终端 B：启动审核
-python3 -m vive_correct review --out outputs/cv
+python3 -m vive_correct review --out outputs/stove_review --port 18775
 ```
 
-打开 `http://127.0.0.1:18763`，核对物理左右手、标签四角和 XYZ 轴，再点击 **通过审核**。未完成的编辑可 **仅暂存**。新结果自动加入列表，不覆盖当前编辑。
+打开 [审核界面](http://127.0.0.1:18775)，检查物理左右手、标签四角和 XYZ 轴，填写审核人：
+
+- **通过审核**：保存重建依据，随后可导出或重建。
+- **不通过**：记录极端案例及可选原因，整条数据退出后续流程。
+- **仅暂存，不通过**：保存未完成编辑，仍处于待审核状态，不等同于整条“不通过”。
+
+具体操作见 [人工审核指南](docs/user_guide.md)。
 
 ### 2. 按需导出与查看
 
-审核成功后点击 **导出 RRD 文件**，等待完成，再执行：
+审核通过后，可在页面点击“导出 RRD 文件”，也可批量执行：
 
 ```bash
-python3 -m vive_correct view outputs/cv
+python3 -m vive_correct repair --out outputs/stove_review --export-jobs 1
+python3 -m vive_correct view outputs/stove_review
 ```
 
 ### 3. 按需重建六个文件
 
-通过审核后执行，无需先导出 RRD：
+无需先导出 RRD：
 
 ```bash
 # 生成独立修正文件，保留源数据
-python3 -m vive_correct rebuild --out outputs/cv
+python3 -m vive_correct rebuild --out outputs/stove_review
 
-# 需要替换源数据时执行；覆盖前自动保存初始备份
-python3 -m vive_correct rebuild --out outputs/cv --in-place
+# 可选：备份后覆盖源数据
+python3 -m vive_correct rebuild --out outputs/stove_review --in-place
 ```
 
-重建范围为每条数据 `data/chunk-000/episode_000000/` 下的六个 Parquet：
-
-- `observation.left_wrist_pose.parquet`、`observation.right_wrist_pose.parquet`：左右腕部位置和方向。
-- `action.parquet`、`observation.state.parquet`：其中的左右腕部字段。
-- `observation.hand_left_points.parquet`、`observation.hand_right_points.parquet`：左右手关节点坐标。
-
-只处理审核依据有效的数据，保留时间戳及其他字段；结果见 `outputs/cv/rebuild_manifest.json`。不修改 `observation.hand_skeleton.parquet`，不自动更新数据集 `meta/`。
+目标为左右腕部位姿、`action`、`observation.state` 和左右手点六个 Parquet；完整范围、备份和元数据要求见 [重建说明](docs/review_rebuild.md#重建与备份)。
 
 ### 只处理指定样本
 
-新建 `episodes.json`，填写相对数据集根目录的路径，例如：
+创建非空 JSON 数组，填写相对本次数据目录的样本路径，并在选帧命令后加 `--episodes-file /path/to/episodes.json`。完整搜索用 `--feature-search full`；预览计划用 `--dry-run`。参数细节见 [选帧指南](docs/cv_detection.md)。
 
-```json
-["stove/L3-003-2026-10-30-17-24-33", "workbench/L3-003-2026-10-27-11-12-25"]
-```
+## 数据边界
 
-在选帧命令后加 `--episodes-file episodes.json`；省略则处理目录下全部样本。相同配置可续跑；输入、检测配置或计算代码变化时使用新输出目录。
-
-坐标轴调整、批量导出、源文件重建和排错见 [审核与重建指南](docs/review_rebuild.md)。
-
-## 使用边界
-
-- 原点为 **50 × 30 mm 标签中心**，不是已标定的 Vive 内部原点；标签须与腕部设备刚性绑定。
-- 自动候选的图像左右不代表物理左右手；几何检查通过也不代表实测精度达标。
-- 默认头相机外参是安装近似，使用其他设备前应核对 [相机参数](calibrations/README.md)。当前识别输入固定为矫正左目，不能通过替换内参切换为眼动相机。
-- 审核和导出只写输出目录；源文件覆盖须显式执行 `rebuild --in-place`。
+- 修正原点是 **50 × 30 mm 标签中心**；标签须与腕部刚性绑定，不代表已标定的 Vive 内部原点。
+- 图像左右不代表物理左右手。自动检测及几何检查不能替代人工确认或精度验收。
+- 输入固定为矫正左目；默认外参是安装近似，使用前核对 [相机参数](calibrations/README.md)。
+- 仅 `rebuild --in-place` 覆盖源文件；不修改 `hand_skeleton`，不自动更新 `meta/`。
 
 ## 文档导航
 
-- [纯 CV 选帧](docs/cv_detection.md)：样本清单、扫描模式、检测调参与评估。
-- [审核与重建](docs/review_rebuild.md)：坐标轴校准、RRD 导出、源文件覆盖与恢复。
-- [运行与配置](vive_correct/README.md)：输入要求、可选模型路径及阶段产物。
-- [字段与接口](docs/observations_schema.md)：坐标约定、审核 schema 和预览接口。
-- [手部校准模型](docs/hand_pipeline.md)：刚性变换、缺失值处理与独立 MANUS 路径。
-- [Rerun 与深度输入](ego_data/README_rerun.md)：原始数据查看、两种深度元数据名称及所需字段。
-- [开发说明](docs/development.md)：模块职责、并发与数据约束、检查入口。
-
-研究与历史记录：[手部安装标定](docs/hand_calibration.md)、[模型对比实验](docs/experiments.md)、[CV 历史验证](docs/cv_validation.md)。
+- 操作：[人工审核](docs/user_guide.md) · [导出、重建与排错](docs/review_rebuild.md) · [CV 选帧](docs/cv_detection.md)
+- 参考：[输入与配置](vive_correct/README.md) · [字段与接口](docs/observations_schema.md) · [校准模型](docs/hand_pipeline.md) · [RRD 输入](ego_data/README_rerun.md)
+- 开发：[检查、架构与约束](docs/development.md)
+- 历史研究（不作为当前能力承诺）：[安装标定](docs/hand_calibration.md) · [模型实验](docs/experiments.md) · [CV 验证](docs/cv_validation.md)

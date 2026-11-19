@@ -22,11 +22,13 @@ from vive_correct.axis_calibration import enrich_pose
 
 
 def load_bundle(store, index, calibration):
+    state = store.load(index)
+    if state["exclusion"]:
+        raise ValueError(state["pending_reason"])
     pointer = store.path(index).with_name("approval.json")
     if not pointer.exists():
         raise ValueError("尚未保存完整重建依据，请点击「通过审核」")
     bundle = read_json(pointer)
-    state = store.load(index)
     if state["status"] != "ready" or state["revision"] != bundle["review_revision"]:
         raise ValueError("审核选择已变化，请重新点击「通过审核」")
     if read_json(calibration) != read_json(bundle["calibration"]):
@@ -174,6 +176,7 @@ def _approve(store, index, payload, calibration):
 def stage_files(bundle):
     """Build once; both in-place rebuild and rendering consume these exact Parquets."""
     started = perf_counter()
+    verify_provenance(read_json(bundle["report"]))
     folder = Path(bundle["directory"])
     cache = folder / "corrected_manifest.json"
     originals = original_files(Path(bundle["episode"]))

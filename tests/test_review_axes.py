@@ -258,6 +258,11 @@ class AxisTests(unittest.TestCase):
         self.addCleanup(server.shutdown)
         conn = http.client.HTTPConnection("127.0.0.1", server.server_port)
         self.addCleanup(conn.close)
+        conn.request("GET", "/axis_rotation.js")
+        resource = conn.getresponse()
+        self.assertEqual(resource.status, 200)
+        self.assertIn("text/javascript", resource.getheader("Content-Type"))
+        self.assertIn(b"function rotateCurrentAxes", resource.read())
         choice = dict(self.store.load(0)["selected"]["left"], side="left")
         headers = {"Content-Type": "application/json", "X-Review-Token": server.token}
 

@@ -23,14 +23,35 @@
 }
 ```
 
-角度必须是三个有限数，采用本地内禀 XYZ，`C = Rx(α) Ry(β) Rz(γ)`，右乘源腕部旋转。手动输入与四角校正使用相同字段；零角度表示恢复源方向。schema 2 加载时保留选择并默认零角度，必须重新审核。
+角度必须是三个有限数，采用本地内禀 XYZ，`C = Rx(α) Ry(β) Rz(γ)`，右乘源腕部旋转。绕当前轴按钮使用 `C_new = C × R_axis(Δ)` 合成，再转为等效内禀 XYZ 角；手动输入与四角校正使用相同字段；零角度表示恢复源方向。schema 2 加载时保留选择并默认零角度，必须重新审核。
 
-### 依据包
+## 整条不通过记录
+
+`<out>/rejected_episodes.json` 是整条排除的唯一状态来源，与单侧 `selected.*.status="rejected"` 不同。结构如下，路径仅为示例：
+
+```json
+{
+  "schema_version": 1,
+  "entries": [{
+    "episode": "/data/stove/sample",
+    "video": "/data/stove/sample/videos/chunk-000/observation.images.headband_left_rgb_rectified/episode_000000.mp4",
+    "features_file": "/output/features/sample/features.json",
+    "reviewer": "reviewer-id",
+    "reason": "标签严重遮挡",
+    "rejected_at": "2026-11-19T08:00:00+00:00",
+    "review_revision": null
+  }]
+}
+```
+
+`episode` 是去重键；路径由服务端生成。原因可为空，`review_revision` 表示拒绝时已有人工记录的版本。接口返回 `status="excluded"`、`approved=false` 与 `exclusion` 记录；已排除条目不能用普通保存或通过接口恢复。清单原子写入并同步落盘，先记录排除再使旧输出索引失效。
+
+## 依据包
 
 `features/.../approval.json` 指向 `<out>/approved/<版本>/`。使用前须校验审核修订、输入、计算代码、标定快照和文件哈希。
 
 - `human_review.json`：审核快照。
-- `observations.json`：参考帧、真实时间戳、四角、PnP 结果及最终姿态；`human_review_sha256`、`review_binding`、`input_signature` 用于追溯。
+- `observations.json`：参考帧、真实时间戳、四角、PnP 结果及最终姿态；`human_review_sha256`、`review_binding`、`input_signature` 用于追溯，`exclusions_file` 指向当前排除清单。
 - `wrist_alignment.json`：每侧本地校准、同步源姿态、深度结果和外参。
 - `camera_mount.json`：外参快照；原帧与 `*_quad.png` 保存四角及轴向叠图。
 - `bundle.json`：依据索引、审核人、版本、原始六文件及依据文件校验值。
@@ -76,6 +97,7 @@
 - `GET /api/status`：选帧进度 `scan`、列表版本 `list_version`、任务 `jobs`、整体运行标志及发现异常；前端每秒查询。
 - `GET /api/episodes`：轻量列表，版本变化时重新获取；列表状态不替代完整依据校验。
 - `GET /api/episode?id=…`：加载完整条目并校验依据。
+- `POST /api/reject?id=…`：整条不通过；提交 `binding`、`revision`、非空 `reviewer` 和可选 `reason`，成功返回 HTTP 200 及当前审核状态。无需有效图像或几何；版本冲突、空审核人、处理中返回 HTTP 400，缺少会话令牌返回 HTTP 403。
 - `POST /api/review?id=…`：保存人工记录，校验 `binding` 与 `revision`。
 - `POST /api/approve?id=…`、`POST /api/export?id=…`：分别提交审核和导出，HTTP 202 仅表示任务已接受；完成或失败由 `jobs` 查询。
 

@@ -7,6 +7,7 @@ const statuses = {
   pending: "待审核",
   accepted: "已通过",
   rejected: "已拒绝",
+  excluded: "不通过 · 已排除",
   ready: "双手已通过",
   prepared: "准备完成",
   complete: "导出完成",
@@ -37,6 +38,9 @@ let jobs = new Map(),
 const submittedDrafts = new Map();
 function currentBusy() {
   return Boolean(current && jobs.get(current.id)?.running);
+}
+function currentLocked() {
+  return currentBusy() || Boolean(current?.exclusion);
 }
 const previews = { left: null, right: null };
 const previewKeys = { left: null, right: null };
@@ -90,14 +94,21 @@ function refreshAxes(s) {
 function showAngles() {
   const angles = choice().axis_angles_deg || [0, 0, 0];
   angles.forEach((v, i) => {
-    $("axis-angle-" + i).value = v;
+    $("axis-angle-" + i).value = Number(v.toFixed(4));
     $("axis-slider-" + i).value = v;
   });
 }
 function setAngle(i, value) {
-  if (!current || saving || currentBusy() || !Number.isFinite(value)) return;
+  if (!current || loading || saving || currentLocked() || !Number.isFinite(value)) return;
   choice().axis_angles_deg ||= [0, 0, 0];
   choice().axis_angles_deg[i] = ((((value + 180) % 360) + 360) % 360) - 180;
+  markEdited();
+  showAngles();
+  draw();
+}
+function rotateAxis(i, delta) {
+  if (!current || loading || saving || currentLocked()) return;
+  choice().axis_angles_deg = rotateCurrentAxes(choice().axis_angles_deg || [0, 0, 0], i, delta);
   markEdited();
   showAngles();
   draw();
@@ -132,16 +143,39 @@ for (const [i, label] of [..."XYZ"].entries()) {
     row.append(button);
   }
   $("axis-inputs").append(row);
+  const relative = document.createElement("div");
+  relative.className = "axis-step-row";
+  const title = document.createElement("strong");
+  title.textContent = "当前 " + label + " 轴";
+  relative.append(title);
+  for (const sign of [-1, 1]) {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.dataset.axisSign = sign;
+    button.dataset.axis = label;
+    button.onclick = () => rotateAxis(i, sign * Number($("axis-step").value));
+    relative.append(button);
+  }
+  $("axis-relative-inputs").append(relative);
 }
+function showAxisStep() {
+  for (const button of document.querySelectorAll("[data-axis-sign]")) {
+    const amount = `${Number(button.dataset.axisSign) > 0 ? "+" : "−"}${$("axis-step").value}°`;
+    button.textContent = amount;
+    button.setAttribute("aria-label", `绕当前 ${button.dataset.axis} 轴 ${amount}`);
+  }
+}
+$("axis-step").onchange = showAxisStep;
+showAxisStep();
 $("axis-reset").onclick = () => {
-  if (!current || saving || currentBusy()) return;
+  if (!current || saving || currentLocked()) return;
   choice().axis_angles_deg = [0, 0, 0];
   markEdited();
   showAngles();
   draw();
 };
 $("axis-from-corners").onclick = () => {
-  if (!current || loading || saving || currentBusy()) return;
+  if (!current || loading || saving || currentLocked()) return;
   const proposal = axes[side]?.key === axisKey(side) && axes[side].data?.corner_correction;
   if (!proposal) return;
   choice().axis_angles_deg = [...proposal.axis_angles_deg];
@@ -201,7 +235,7 @@ function updateStatus() {
       delete control.dataset.waiting;
     }
   }
-  $("axis-controls").disabled = loading || currentBusy() || saving;
+  $("axis-controls").disabled = loading || currentLocked() || saving;
   const cornerPose = axes[side]?.key === axisKey(side) ? axes[side].data : null;
   $("axis-from-corners").disabled = !cornerPose?.corner_correction;
   $("corner-axis-status").textContent = cornerPose?.corner_correction_error
@@ -215,18 +249,20 @@ function updateStatus() {
       : "坐标轴待计算";
   $("hint").textContent = currentBusy()
     ? "本条数据正在后台处理，可切换到其他数据继续审核。"
-    : current.video_error ||
+    : (current.exclusion && current.pending_reason) ||
+      current.video_error ||
       (dirty ? "有未保存修改，请检查后确认；暂存不代表通过。" : current.pending_reason) ||
       "审核依据已保存，可按需导出 RRD。";
   $("side-status").textContent =
     names[side] + "：" + (statuses[choice().status] || choice().status);
-  $("saved-state").textContent =
-    (dirty ? "有未保存修改 · " : "已保存 · ") +
-    Object.entries(current.selected)
-      .map(([s, c]) => names[s] + " " + statuses[c.status])
-      .join(" / ");
+  $("saved-state").textContent = current.exclusion
+    ? `不通过 · 已记录至 rejected_episodes.json · 审核人：${current.exclusion.reviewer}`
+    : (dirty ? "有未保存修改 · " : "已保存 · ") +
+      Object.entries(current.selected)
+        .map(([s, c]) => names[s] + " " + statuses[c.status])
+        .join(" / ");
   for (const id of ["accept", "reject", "save", "swap"])
-    $(id).disabled = loading || currentBusy() || saving;
+    $(id).disabled = loading || currentLocked() || saving;
   const hasPreviews = ["left", "right"].every(
     (s) =>
       previewKeys[s] === `${current.id}:${current.selected[s].frame_index}` &&
@@ -234,12 +270,13 @@ function updateStatus() {
       current.selected[s].quad?.length === 4,
   );
   const hasAxes = ["left", "right"].every((s) => Boolean(projection(s)));
-  $("approve").disabled = loading || currentBusy() || saving || !hasPreviews || !hasAxes;
+  $("approve").disabled = loading || currentLocked() || saving || !hasPreviews || !hasAxes;
+  $("reject-episode").disabled = currentLocked() || saving;
   $("accept").disabled ||= !projection(side);
   $("approve").textContent = currentBusy()
     ? statuses[jobs.get(current.id).status] || "后台处理中"
     : "通过审核";
-  $("export").disabled = loading || currentBusy() || saving || dirty || !current.approved;
+  $("export").disabled = loading || currentLocked() || saving || dirty || !current.approved;
   for (const id of [
     "side",
     "frame",
@@ -252,10 +289,14 @@ function updateStatus() {
     "reviewer",
     "undo",
     "clear",
+    "rejection-reason",
     "edit-left",
     "edit-right",
   ])
-    $(id).disabled = currentBusy() || saving;
+    $(id).disabled =
+      currentBusy() ||
+      saving ||
+      (Boolean(current.exclusion) && !["side", "edit-left", "edit-right"].includes(id));
   for (const s of ["left", "right"])
     $("overview-" + s + "-status").textContent =
       statuses[current.selected[s].status] + (axes[s]?.error ? " · " + axes[s].error : "");
@@ -282,7 +323,9 @@ async function listEpisodes() {
 }
 function updateEpisodeList() {
   const readyCount = episodeRows.filter((row) => row.status === "ready").length;
-  $("progress").textContent = `${readyCount}/${episodeRows.length} 已通过`;
+  const excludedCount = episodeRows.filter((row) => row.status === "excluded").length;
+  $("progress").textContent =
+    `${readyCount}/${episodeRows.length} 已通过 · ${excludedCount} 不通过`;
   for (const button of $("episodes").children) {
     const row = episodeRows.find((row) => row.id === Number(button.dataset.episodeId));
     if (row) button.textContent = episodeLabel(row);
@@ -290,13 +333,15 @@ function updateEpisodeList() {
 }
 function episodeLabel(row) {
   const job = jobs.get(row.id);
-  const label = job?.running
-    ? statuses[job.status]
-    : job?.status === "failed"
-      ? "处理失败，可重试"
-      : job?.status === "complete" && job.review?.revision === row.revision
-        ? "导出完成"
-        : statuses[row.status];
+  const label = row.exclusion
+    ? statuses.excluded
+    : job?.running
+      ? statuses[job.status]
+      : job?.status === "failed"
+        ? "处理失败，可重试"
+        : job?.status === "complete" && job.review?.revision === row.revision
+          ? "导出完成"
+          : statuses[row.status];
   return `${row.id + 1}. ${row.episode.split("/").slice(-2).join("/")} · ${label}`;
 }
 async function openEpisode(id) {
@@ -318,7 +363,12 @@ async function openEpisode(id) {
   $("hint").textContent =
     data.video_error || data.pending_reason || "审核依据已保存，可按需导出 RRD。";
   $("reviewer").value =
-    data.reviewer || localStorage.getItem("vive-reviewer") || data.default_reviewer || "";
+    data.exclusion?.reviewer ||
+    data.reviewer ||
+    localStorage.getItem("vive-reviewer") ||
+    data.default_reviewer ||
+    "";
+  $("rejection-reason").value = data.exclusion?.reason || "";
   $("frame-count").textContent = `共 ${data.frame_count} 帧`;
   $("timeline").max = $("frame").max = Math.max(0, data.frame_count - 1);
   $("candidate").replaceChildren(new Option("选择候选…", ""));
@@ -477,7 +527,7 @@ async function loadFrame() {
   }
 }
 async function goFrame(frame) {
-  if (saving || currentBusy()) return;
+  if (saving || currentLocked()) return;
   if (!Number.isInteger(frame) || frame < 0 || frame >= current.frame_count)
     throw new Error("帧号超出视频范围");
   if (frame === choice().frame_index) return;
@@ -526,9 +576,10 @@ function paintAxes(context, axesProjection, scale = 1) {
   });
 }
 function resizeCanvas() {
+  if (!$("editor").open || !canvas.parentElement.clientWidth) return;
   const width = Math.min(
     canvas.parentElement.clientWidth,
-    (window.innerHeight * 0.6 * canvas.width) / canvas.height,
+    (canvas.parentElement.clientHeight * canvas.width) / canvas.height,
   );
   canvas.style.width = `${width * Number($("zoom").value)}px`;
   draw();
@@ -570,7 +621,7 @@ function point(event) {
   ];
 }
 canvas.onpointerdown = (event) => {
-  if (!bitmap || loading || currentBusy() || saving) return;
+  if (!bitmap || loading || currentLocked() || saving) return;
   const p = point(event),
     points = choice().quad,
     threshold = (14 * canvas.width) / canvas.getBoundingClientRect().width;
@@ -586,7 +637,7 @@ canvas.onpointerdown = (event) => {
   }
 };
 canvas.onpointermove = (event) => {
-  if (dragging >= 0 && !loading && !saving && !currentBusy()) {
+  if (dragging >= 0 && !loading && !saving && !currentLocked()) {
     choice().quad[dragging] = point(event);
     refreshAxes(side);
     draw();
@@ -596,7 +647,7 @@ canvas.onpointerup = canvas.onpointercancel = () => {
   dragging = -1;
 };
 async function save(status) {
-  if (loading || saving || currentBusy()) return;
+  if (loading || saving || currentLocked()) return;
   const selected = structuredClone(current.selected);
   if (status === "accepted") {
     selected[side].physical_side = side;
@@ -674,14 +725,14 @@ $("candidate").onchange = () =>
 $("overlay").onchange = draw;
 $("zoom").onchange = resizeCanvas;
 $("undo").onclick = () => {
-  if (!loading && !saving && !currentBusy()) {
+  if (!loading && !saving && !currentLocked()) {
     choice().quad.pop();
     markEdited();
     draw();
   }
 };
 $("clear").onclick = () => {
-  if (!loading && !saving && !currentBusy()) {
+  if (!loading && !saving && !currentLocked()) {
     choice().quad = [];
     markEdited();
     draw();
@@ -735,6 +786,32 @@ $("approve").onclick = () =>
       dirty = false;
       localStorage.setItem("vive-reviewer", reviewer);
       message("已提交审核，正在保存特征帧和重建依据；可继续审核其他数据。需要 RRD 时再点击导出。");
+    } finally {
+      saving = false;
+      updateStatus();
+    }
+  });
+$("reject-episode").onclick = () =>
+  guard(async () => {
+    if ($("reject-episode").disabled) return;
+    const reviewer = $("reviewer").value.trim();
+    if (!reviewer) throw new Error("不通过前请填写审核人");
+    saving = true;
+    updateStatus();
+    try {
+      const result = await api(`/api/reject?id=${current.id}`, {
+        revision: current.revision,
+        binding: current.binding,
+        reviewer,
+        reason: $("rejection-reason").value.trim(),
+      });
+      Object.assign(current, result);
+      dirty = false;
+      submittedDrafts.delete(current.id);
+      jobs.delete(current.id);
+      localStorage.setItem("vive-reviewer", reviewer);
+      await listEpisodes();
+      message("已记录至 rejected_episodes.json；本条数据不再参与导出和重建。");
     } finally {
       saving = false;
       updateStatus();
@@ -807,7 +884,8 @@ async function poll() {
       const latest = await api(`/api/review-state?id=${id}`);
       if (current?.id === id && current.revision === revision && !dirty) {
         current.approved = latest.approved && latest.revision === revision;
-        current.status = current.approved ? "ready" : "pending";
+        current.exclusion = latest.exclusion;
+        current.status = latest.status;
         current.pending_reason =
           latest.revision === revision
             ? latest.pending_reason
@@ -851,6 +929,10 @@ guard(async () => {
   if (first) await openEpisode(first.id);
   else updateStatus();
   await poll();
-  message("检查左右参考图，点击「通过审核」保存依据；需要时单独导出 RRD。");
+  message(
+    current?.exclusion
+      ? "本条数据不通过，已记录至 rejected_episodes.json，不参与导出和重建。"
+      : "检查左右参考图，点击「通过审核」保存依据；需要时单独导出 RRD。",
+  );
 });
 setInterval(() => guard(poll), 1000);

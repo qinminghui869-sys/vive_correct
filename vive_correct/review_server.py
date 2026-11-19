@@ -27,6 +27,7 @@ from vive_correct.runtime_cache import CACHE, cached_file, file_stamp, source_st
 from vive_correct.feature_progress import scan_progress
 from vive_correct.task_locks import reserve, adopt, operation_lock
 from vive_correct.source_data import baseline_read
+from vive_correct.review_exclusions import FILENAME
 
 DEFAULT_PORT = 18763
 UI = Path(__file__).with_name("review_ui")
@@ -118,11 +119,14 @@ class ReviewServer(ThreadingHTTPServer):
 
     def list_version(self):
         versions = [self.entry_version(i) for i in range(len(self.store.paths))]
+        versions.append(file_stamp(self.store.output / FILENAME))
         return hashlib.sha256(repr(versions).encode()).hexdigest()
 
     def summary(self, index):
         try:
             state = self.store.load(index)
+            if state["exclusion"]:
+                return dict(state, approved=False, validation="summary")
             pointer = self.store.path(index).with_name("approval.json")
             bundle = read_json(pointer) if pointer.exists() else {}
             state["approved"] = (
@@ -146,6 +150,8 @@ class ReviewServer(ThreadingHTTPServer):
         # Polling checks identities, not large-file hashes. Public mutations always
         # perform the original full validation independently of this display cache.
         state = self.store.load(index)
+        if state["exclusion"]:
+            return dict(state, approved=False)
         pointer = self.store.path(index).with_name("approval.json")
         bundle = read_json(pointer) if pointer.exists() else {}
         key = (
@@ -180,6 +186,9 @@ class ReviewServer(ThreadingHTTPServer):
             index=index, kind=kind, status="queued", running=True, error=None, queued_at=time()
         )
         try:
+            rejected = self.store.load(index)
+            if rejected["exclusion"]:
+                raise ValueError(rejected["pending_reason"])
             with self.job_lock:
                 self.jobs[index] = job
                 atomic_json(path.with_name("review_job.json"), job)
@@ -187,7 +196,8 @@ class ReviewServer(ThreadingHTTPServer):
             executor.submit(self.process_one, index, kind, deepcopy(payload), reservation)
         except Exception:
             reservation.close()
-            self.update_job(index, status="failed", running=False)
+            if self.jobs.get(index) is job:
+                self.update_job(index, status="failed", running=False)
             raise
         return dict(running=True, submitted=[index], kind=kind)
 
@@ -229,6 +239,14 @@ class ReviewServer(ThreadingHTTPServer):
     def save_review(self, index, payload):
         with operation_lock(self.store.path(index).parent):
             self.store.save(index, payload)
+            with self.job_lock:
+                self.jobs.pop(index, None)
+                self.store.path(index).with_name("review_job.json").unlink(missing_ok=True)
+            return self.state(index, full=True)
+
+    def reject_episode(self, index, payload):
+        with operation_lock(self.store.path(index).parent):
+            self.store.reject_episode(index, payload)
             with self.job_lock:
                 self.jobs.pop(index, None)
                 self.store.path(index).with_name("review_job.json").unlink(missing_ok=True)
@@ -329,12 +347,13 @@ class ReviewHandler(BaseHTTPRequestHandler):
             path, query = self.arguments()
             self.server.refresh()
             store = self.server.store
-            if path in ("/", "/review.js", "/review.css"):
+            if path in ("/", "/review.js", "/axis_rotation.js", "/review.css"):
                 name = "index.html" if path == "/" else path[1:]
                 body = (UI / name).read_text().replace("__REVIEW_TOKEN__", self.server.token)
                 kind = {
                     "index.html": "text/html",
                     "review.js": "text/javascript",
+                    "axis_rotation.js": "text/javascript",
                     "review.css": "text/css",
                 }[name]
                 return self.send(200, body, kind + "; charset=utf-8")
@@ -399,6 +418,8 @@ class ReviewHandler(BaseHTTPRequestHandler):
                 return self.send(
                     202, self.server.start_job(int(query["id"][0]), "approve", payload)
                 )
+            if path == "/api/reject":
+                return self.send(200, self.server.reject_episode(int(query["id"][0]), payload))
             if path == "/api/export":
                 return self.send(202, self.server.start_job(int(query["id"][0]), "export"))
             if path == "/api/review":

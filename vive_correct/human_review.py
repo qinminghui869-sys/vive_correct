@@ -22,6 +22,7 @@ from vive_correct.review_io import atomic_json, output_lock, read_json
 from vive_correct.axis_calibration import CONVENTION, axis_angles, prepare_pose
 from vive_correct.runtime_cache import cached_file
 from vive_correct.review_catalog import refresh_catalog
+from vive_correct.review_exclusions import FILENAME, exclusion
 from vive_correct.task_locks import operation_lock
 
 SIDES = ("left", "right")
@@ -201,6 +202,11 @@ class ReviewStore:
             reason = "输入或特征报告已变化，请重新确认双手后导出"
         else:
             reason = "、".join(pending) + "尚未确认通过；请检查后点击「通过审核」（暂存不代表通过）"
+        rejected = exclusion(self.output / FILENAME, report["episode"])
+        if rejected:
+            reason = "整条数据审核不通过，已排除后续导出和重建"
+            if rejected.get("reason"):
+                reason += "：" + rejected["reason"]
         return dict(
             id=index,
             episode=report["episode"],
@@ -209,7 +215,8 @@ class ReviewStore:
             needs_reconfirmation=stale,
             selected=choices,
             reviewer=saved.get("reviewer") or "",
-            status="ready" if ready else "pending",
+            status="excluded" if rejected else "ready" if ready else "pending",
+            exclusion=rejected,
             pending_reason=reason,
             error=report.get("error"),
             missing_hands=report.get("missing_hands", []),
@@ -218,6 +225,8 @@ class ReviewStore:
     def save(self, index, payload):
         with operation_lock(self.path(index).parent), output_lock(self.path(index).parent):
             current = self.load(index)
+            if current["exclusion"]:
+                raise ValueError(current["pending_reason"])
             if payload.get("revision") != current["revision"]:
                 raise ValueError("审核已被修改，请重新加载后操作")
             if payload.get("binding") != current["binding"]:
@@ -298,6 +307,42 @@ class ReviewStore:
                 self.invalidate(current["episode"])
             return self.load(index)
 
+    def reject_episode(self, index, payload):
+        """Exclude an episode without requiring valid frames, geometry or source poses."""
+        with operation_lock(self.path(index).parent), output_lock(self.path(index).parent):
+            current = self.load(index)
+            if payload.get("revision") != current["revision"]:
+                raise ValueError("审核已被修改，请重新加载后操作")
+            if payload.get("binding") != current["binding"]:
+                raise ValueError("输入或特征报告已变化，请重新加载后操作")
+            reviewer = str(payload.get("reviewer", "")).strip()
+            if not reviewer:
+                raise ValueError("不通过前请填写审核人")
+            if current["exclusion"]:
+                return current
+            episode = str(Path(current["episode"]).resolve())
+            record = dict(
+                episode=episode,
+                video=str(Path(episode) / VIDEO_SUFFIX),
+                features_file=str(self.path(index)),
+                reviewer=reviewer,
+                reason=str(payload.get("reason", "")).strip(),
+                rejected_at=datetime.now(timezone.utc).isoformat(),
+                review_revision=current["revision"],
+            )
+            with output_lock(self.output, blocking=True):
+                path = self.output / FILENAME
+                document = read_json(path) if path.exists() else dict(schema_version=1, entries=[])
+                document["entries"] = [
+                    row for row in document["entries"] if row["episode"] != episode
+                ] + [record]
+                document["entries"].sort(key=lambda row: row["episode"])
+                # Publish the exclusion first: downstream checks remain fail-closed
+                # even if invalidating an old display manifest subsequently fails.
+                atomic_json(path, document, durable=True)
+                self.invalidate(current["episode"])
+            return self.load(index)
+
     @staticmethod
     def check_distinct(selected):
         left, right = (selected[s] for s in SIDES)
@@ -361,6 +406,7 @@ class ReviewStore:
             observations=[observations[k] for k in sorted(observations)],
             human_review=str(review_path),
             human_review_sha256=digest(review_path),
+            exclusions_file=str(self.output / FILENAME),
             review_binding=review["binding"],
             features_file=str(self.path(index)),
             input_signature=source_signature(episode),
@@ -369,6 +415,8 @@ class ReviewStore:
 
 def verify_provenance(report):
     """Used again by standalone RRD export; old decisions cannot silently be replayed."""
+    if report.get("exclusions_file") and exclusion(report["exclusions_file"], report["episode"]):
+        raise ValueError("整条数据审核不通过，已排除后续导出和重建")
     if "human_review_sha256" not in report:
         return
     if (

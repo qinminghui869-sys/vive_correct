@@ -6,6 +6,7 @@
     <meta name="review-token" content="__REVIEW_TOKEN__" />
     <title>Vive 特征帧审核</title>
     <link rel="stylesheet" href="/review.css" />
+    <script src="/axis_rotation.js" defer></script>
     <script src="/review.js" defer></script>
   </head>
   <body>
@@ -56,78 +57,118 @@
         </div>
         <div class="toolbar">
           <label>审核人 <input id="reviewer" placeholder="姓名或工号" autocomplete="name" /></label>
-          <button id="approve" class="primary" disabled>通过审核</button>
+          <span class="review-decisions">
+            <button id="approve" class="primary" disabled>通过审核</button>
+            <button id="reject-episode" class="danger" disabled>不通过</button>
+          </span>
           <button id="export" disabled>导出 RRD 文件</button>
           <span>通过审核保存重建依据；RRD 按需导出，两者均不覆盖源文件。</span>
         </div>
+        <label class="rejection-reason"
+          >不通过原因（选填）
+          <input id="rejection-reason" placeholder="如：严重遮挡、标签缺失或姿态异常" />
+        </label>
         <p id="saved-state"></p>
         <details id="editor">
           <summary>需要调整时展开：重选帧、修改四角、坐标轴或手侧</summary>
-          <div class="toolbar">
-            <label
-              >物理手侧
-              <select id="side">
-                <option value="left">左手</option>
-                <option value="right">右手</option>
-              </select></label
-            >
-            <button id="swap">交换左右选择</button><span id="side-status"></span>
-          </div>
-          <div class="toolbar">
-            <button id="previous">上一帧</button
-            ><label>帧号（从 0 开始） <input id="frame" type="number" min="0" value="0" /></label>
-            <button id="jump">跳转</button><button id="next">下一帧</button
-            ><span id="frame-count"></span>
-            <label
-              >候选
-              <select id="candidate">
-                <option value="">选择候选…</option>
-              </select></label
-            >
-          </div>
-          <input id="timeline" type="range" min="0" max="0" value="0" aria-label="视频帧时间轴" />
-          <div class="toolbar">
-            <label><input id="overlay" type="checkbox" checked />显示标注</label>
-            <label
-              >缩放
-              <select id="zoom">
-                <option value="1">适应窗口</option>
-                <option value="1.5">150%</option>
-                <option value="2">200%</option>
-                <option value="3">300%</option>
-              </select></label
-            >
-            <button id="undo">撤销末点</button><button id="clear">清空四角</button>
-            <span>沿标签边缘依次点击四角；拖动圆点修正。</span>
-          </div>
-          <fieldset id="axis-controls">
-            <legend>坐标轴校准 · 本地内禀 XYZ · 红 X / 绿 Y / 蓝 Z</legend>
-            <p>原点为标签中心；初始方向来自源腕部。旋转和标签偏移将随腕部应用到整段及手部关节。</p>
-            <div id="axis-inputs"></div>
-            <button id="axis-from-corners" type="button">按四角校正方向</button>
-            <button id="axis-reset" type="button">恢复源方向</button>
-            <p>
-              四角校正按标签平面取 X 向左、Y 向上、Z
-              朝相机前方的右手系，并非自动识别设备朝向。应用后可微调；修改四角后需再次点击。
-            </p>
-            <p id="corner-axis-status" role="status"></p>
-            <p id="axis-status" role="status"></p>
-          </fieldset>
-          <div class="viewer">
-            <canvas id="frame-canvas" aria-label="原帧与可编辑四角"></canvas>
-          </div>
-          <div class="detail">
-            <div>
-              <h2>局部放大</h2>
-              <canvas id="crop" width="360" height="240"></canvas>
-            </div>
-            <div class="decision">
-              <p id="coordinates"></p>
-              <label>备注 <textarea id="notes" rows="2"></textarea></label>
+          <div class="editor-workspace">
+            <div class="editor-visual">
               <div class="toolbar">
-                <button id="accept" class="primary">确认此侧并保存</button
-                ><button id="reject">拒绝此侧并保存</button
-                ><button id="save">仅暂存，不通过</button>
+                <button id="previous">上一帧</button
+                ><label
+                  >帧号（从 0 开始） <input id="frame" type="number" min="0" value="0"
+                /></label>
+                <button id="jump">跳转</button><button id="next">下一帧</button
+                ><span id="frame-count"></span>
+                <label
+                  >候选
+                  <select id="candidate">
+                    <option value="">选择候选…</option>
+                  </select></label
+                >
+              </div>
+              <input
+                id="timeline"
+                type="range"
+                min="0"
+                max="0"
+                value="0"
+                aria-label="视频帧时间轴"
+              />
+              <div class="toolbar">
+                <label><input id="overlay" type="checkbox" checked />显示标注</label>
+                <label
+                  >缩放
+                  <select id="zoom">
+                    <option value="1">适应窗口</option>
+                    <option value="1.5">150%</option>
+                    <option value="2">200%</option>
+                    <option value="3">300%</option>
+                  </select></label
+                >
+                <button id="undo">撤销末点</button><button id="clear">清空四角</button>
+                <span>沿标签边缘依次点击四角；拖动圆点修正。</span>
+              </div>
+              <div class="viewer">
+                <canvas id="frame-canvas" aria-label="原帧与可编辑四角"></canvas>
+              </div>
+              <div>
+                <h2>局部放大</h2>
+                <canvas id="crop" width="360" height="240"></canvas>
+              </div>
+            </div>
+            <div class="editor-controls">
+              <div class="toolbar">
+                <label
+                  >物理手侧
+                  <select id="side">
+                    <option value="left">左手</option>
+                    <option value="right">右手</option>
+                  </select></label
+                >
+                <button id="swap">交换左右选择</button><span id="side-status"></span>
+              </div>
+              <fieldset id="axis-controls">
+                <legend>坐标轴校准 · 红 X / 绿 Y / 蓝 Z</legend>
+                <p>
+                  原点为标签中心；初始方向来自源腕部。旋转和标签偏移将随腕部应用到整段及手部关节。
+                </p>
+                <div class="toolbar">
+                  <label
+                    >旋转步长
+                    <select id="axis-step">
+                      <option value="1">1°</option>
+                      <option value="5" selected>5°</option>
+                      <option value="10">10°</option>
+                      <option value="45">45°</option>
+                      <option value="90">90°</option>
+                    </select>
+                  </label>
+                </div>
+                <div id="axis-relative-inputs"></div>
+                <p class="control-help">每次绕当前显示的轴旋转，正负遵循右手定则。</p>
+                <details class="absolute-angles">
+                  <summary>相对源方向的欧拉角（内禀 XYZ）</summary>
+                  <p class="control-help">直接修改角度参数；绕当前轴微调请使用上方按钮。</p>
+                  <div id="axis-inputs"></div>
+                </details>
+                <button id="axis-from-corners" type="button">按四角校正方向</button>
+                <button id="axis-reset" type="button">恢复源方向</button>
+                <p>
+                  四角校正按标签平面取 X 向左、Y 向上、Z
+                  朝相机前方的右手系，并非自动识别设备朝向。应用后可微调；修改四角后需再次点击。
+                </p>
+                <p id="corner-axis-status" role="status"></p>
+                <p id="axis-status" role="status"></p>
+              </fieldset>
+              <div class="decision">
+                <p id="coordinates"></p>
+                <label>备注 <textarea id="notes" rows="2"></textarea></label>
+                <div class="toolbar">
+                  <button id="accept" class="primary">确认此侧并保存</button
+                  ><button id="reject">拒绝此侧并保存</button
+                  ><button id="save">仅暂存，不通过</button>
+                </div>
               </div>
             </div>
           </div>
