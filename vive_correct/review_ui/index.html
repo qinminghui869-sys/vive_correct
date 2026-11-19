@@ -63,7 +63,13 @@
         <p id="saved-state"></p>
         <details id="editor">
           <summary>需要调整时展开：重选帧、修改四角、坐标轴或手侧</summary>
-          <div class="toolbar">
+          <div id="shared-hands" class="toolbar" hidden>
+            <strong>共同参考帧</strong>
+            <button id="shared-left" aria-pressed="true">1 · 调整左手</button>
+            <button id="shared-right" aria-pressed="false">2 · 调整右手</button>
+            <span id="shared-status"></span>
+          </div>
+          <div id="side-controls" class="toolbar">
             <label
               >物理手侧
               <select id="side">
@@ -101,8 +107,10 @@
             <span>沿标签边缘依次点击四角；拖动圆点修正。</span>
           </div>
           <fieldset id="axis-controls">
-            <legend>坐标轴校准 · 本地内禀 XYZ · 红 X / 绿 Y / 蓝 Z</legend>
-            <p>原点为标签中心；初始方向来自源腕部。旋转和标签偏移将随腕部应用到整段及手部关节。</p>
+            <legend id="axis-title">坐标轴校准 · 本地内禀 XYZ · 红 X / 绿 Y / 蓝 Z</legend>
+            <p id="axis-help">
+              原点为标签中心；初始方向来自源腕部。旋转和标签偏移将随腕部应用到整段及手部关节。
+            </p>
             <div id="axis-inputs"></div>
             <button id="axis-from-corners" type="button">按四角校正方向</button>
             <button id="axis-reset" type="button">恢复源方向</button>

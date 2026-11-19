@@ -18,6 +18,53 @@ from vive_correct.run_dataset import main
 
 
 class FastCLITests(unittest.TestCase):
+    def test_mode_specific_episode_lists_and_output_isolation(self):
+        from vive_correct.camera_input import video_suffix
+
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            dataset, output = root / "dataset", root / "out"
+            for name, suffix in (
+                ("left_only", VIDEO_SUFFIX),
+                ("eye_only", video_suffix({"coordinate_mode": "eye-reference"})),
+            ):
+                video = dataset / name / suffix
+                video.parent.mkdir(parents=True)
+                video.touch()
+            args = ["--profile", "cv", "--dataset", str(dataset), "--out", str(output)]
+            plans = {}
+            for mode, name in (("headband", "left_only"), ("eye-reference", "eye_only")):
+                manifest = root / f"{mode}.json"
+                manifest.write_text(json.dumps([name]))
+                stream = io.StringIO()
+                selected = [*args, "--coordinate-mode", mode, "--episodes-file", str(manifest)]
+                with self.subTest(mode=mode), redirect_stdout(stream):
+                    self.assertEqual(main([*selected, "--dry-run"]), 0)
+                plans[mode] = json.loads(stream.getvalue())
+                self.assertEqual(plans[mode]["episodes"][0]["path"], str(dataset / name))
+                self.assertFalse(output.exists())
+            self.assertNotIn("camera_input", plans["headband"])
+            self.assertNotIn("sampling_policy", plans["headband"])
+            self.assertEqual(plans["eye-reference"]["stride"], 5)
+            self.assertEqual(plans["eye-reference"]["sampling_policy"]["start_s"], 10)
+            self.assertEqual(plans["eye-reference"]["sampling_policy"]["max_samples"], 100)
+            self.assertEqual(
+                plans["eye-reference"]["camera_input"]["coordinate_mode"], "eye-reference"
+            )
+            output.mkdir()
+            (output / "feature_plan.json").write_text(json.dumps(plans["headband"]))
+            with (
+                redirect_stdout(io.StringIO()),
+                patch("sys.stderr", new_callable=io.StringIO) as errors,
+                self.assertRaises(SystemExit) as rejected,
+            ):
+                main(selected)
+            self.assertEqual(rejected.exception.code, 2)
+            self.assertIn("Feature settings or inputs changed", errors.getvalue())
+            self.assertEqual(
+                json.loads((output / "feature_plan.json").read_text()), plans["headband"]
+            )
+
     def test_cv_default_skips_tracking_and_dry_run_writes_nothing(self):
         with TemporaryDirectory() as directory:
             root = Path(directory)

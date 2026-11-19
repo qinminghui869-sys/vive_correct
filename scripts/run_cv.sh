@@ -4,7 +4,9 @@ set -euo pipefail
 if [[ "${1:-}" == "--help" || "${1:-}" == "-h" ]]; then
   echo "Usage: bash scripts/run_cv.sh [DATASET=samples] [OUT=outputs/cv_fast] [extra run options]"
   echo "Defaults to bounded fast feature selection; writes OUT/run.log; no models or repair."
-  echo "Use --feature-search full for exhaustive recovery; add --stage all for identity tracking."
+  echo "Modes: --coordinate-mode headband (default, rectified left) or eye-reference (eye video)."
+  echo "Use a separate OUT for each mode. Review, repair and rebuild inherit the saved mode."
+  echo "Use --feature-search full for exhaustive recovery; --stage all tracking is headband-only."
   exit 0
 fi
 cd "$(dirname "${BASH_SOURCE[0]}")/.."

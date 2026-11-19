@@ -29,7 +29,9 @@ def load_bundle(store, index, calibration):
     state = store.load(index)
     if state["status"] != "ready" or state["revision"] != bundle["review_revision"]:
         raise ValueError("审核选择已变化，请重新点击「通过审核」")
-    if read_json(calibration) != read_json(bundle["calibration"]):
+    from vive_correct.camera_input import effective_calibration
+
+    if effective_calibration(store, index, calibration) != read_json(bundle["calibration"]):
         raise ValueError("标定已变化，请重新点击「通过审核」")
     if bundle.get("code_signature") != export_code_signature():
         raise ValueError("计算代码已变化，请重新点击「通过审核」生成依据")
@@ -92,12 +94,26 @@ def _approve(store, index, payload, calibration):
         snapshot = folder / "human_review.json"
         atomic_json(snapshot, read_json(store.path(index).with_name("human_review.json")))
         atomic_json(report_path, report)
-        atomic_json(mount_path, read_json(calibration))
-        alignment = build_alignment(episode, report_path, mount_path, refine_depth=True)
+        from vive_correct.camera_input import effective_calibration
+
+        context = store.context(index)
+        atomic_json(mount_path, effective_calibration(store, index, calibration))
+        if context:
+            from vive_correct.eye_reference import build_alignment as build_eye_alignment
+
+            alignment = build_eye_alignment(episode, report, context)
+        else:
+            alignment = build_alignment(episode, report_path, mount_path, refine_depth=True)
         for observation in report["observations"]:
             for side, pose in observation["stickers"].items():
                 sample = next(s for s in alignment["samples"] if s["side"] == side)
                 enrich_pose(pose, sample, report["camera"]["K"])
+                if context:
+                    from vive_correct.eye_reference import enrich_hand_preview
+
+                    enrich_hand_preview(
+                        pose, episode, side, observation["frame_index"], report["camera"]["K"]
+                    )
         atomic_json(report_path, report)
         alignment["source_report_sha256"] = digest(report_path)
         alignment_path = folder / "wrist_alignment.json"
@@ -111,7 +127,9 @@ def _approve(store, index, payload, calibration):
         images = {}
         for side, choice in state["selected"].items():
             frame = choice["frame_index"]
-            image, _ = decode_frame(episode, frame)
+            image, _ = (
+                decode_frame(episode, frame, context) if context else decode_frame(episode, frame)
+            )
             clean = folder / f"{side}_frame_{frame}.png"
             overlay = folder / f"{side}_frame_{frame}_quad.png"
             if not cv2.imwrite(str(clean), image):
@@ -140,6 +158,10 @@ def _approve(store, index, payload, calibration):
                     if visible:
                         cv2.arrowedLine(image, start, end, color, 2, tipLength=0.15)
                         cv2.putText(image, label, end, cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 1)
+            if context:
+                from vive_correct.eye_reference import draw_hand_preview
+
+                draw_hand_preview(image, pose, side)
             if not cv2.imwrite(str(overlay), image):
                 raise ValueError("特征叠图保存失败")
             images[side] = dict(
@@ -164,7 +186,7 @@ def _approve(store, index, payload, calibration):
             artifacts={str(p): digest(p) for p in artifacts},
         )
         verify_provenance(report)
-        if read_json(calibration) != read_json(mount_path):
+        if effective_calibration(store, index, calibration) != read_json(mount_path):
             raise ValueError("审核期间标定发生变化，请重试")
         atomic_json(folder / "bundle.json", bundle)
         atomic_json(store.path(index).with_name("approval.json"), bundle)

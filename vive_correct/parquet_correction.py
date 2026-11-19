@@ -24,6 +24,10 @@ def position_groups(name: str):
 
 def translate(table: pa.Table, name: str, alignment: dict) -> tuple[pa.Table, dict]:
     """Translate complete finite xyz groups; leave rotations, nulls and metadata intact."""
+    if alignment.get("model") == "eye_reference":
+        from vive_correct.eye_reference import correct_table
+
+        return correct_table(table, name, alignment)
     if any(w["model"] == "wrist_local_rigid" for w in alignment["wrists"].values()):
         return rigid_correct(table, name, alignment)
     counts = {}

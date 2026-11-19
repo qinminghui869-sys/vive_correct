@@ -13,8 +13,12 @@ VIDEO_SUFFIX = Path("videos/chunk-000") / VIDEO_KEY / "episode_000000.mp4"
 TIMESTAMP_SUFFIX = Path("data/chunk-000/episode_000000") / f"{VIDEO_KEY}.parquet"
 
 
-def discover(dataset):
+def discover(dataset, context=None):
     """Include incomplete episodes so missing videos are reported, not hidden."""
+    if context:
+        from vive_correct.camera_input import EYE_KEY
+
+        return sorted({p.parents[3] for p in dataset.rglob(f"{EYE_KEY}/episode_000000.mp4")})
     episodes = {
         p.parents[3]
         for p in dataset.rglob(f"{VIDEO_KEY}/episode_000000.mp4")
@@ -24,8 +28,12 @@ def discover(dataset):
     return sorted(episodes)
 
 
-def input_signature(episode):
+def input_signature(episode, context=None):
     files = (VIDEO_SUFFIX, TIMESTAMP_SUFFIX, Path("calibrations/rectify_params.yaml"))
+    if context:
+        from vive_correct.camera_input import video_suffix, timestamp_suffix
+
+        files = (video_suffix(context), timestamp_suffix(context))
     result = {}
     for relative in files:
         path = episode / relative
@@ -37,8 +45,8 @@ def input_signature(episode):
     return result
 
 
-def select_episodes(dataset, episodes_file=None):
-    episodes = discover(dataset)
+def select_episodes(dataset, episodes_file=None, context=None):
+    episodes = discover(dataset, context) if context else discover(dataset)
     if episodes_file is None:
         return episodes
     names = json.loads(Path(episodes_file).read_text())

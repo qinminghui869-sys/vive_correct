@@ -53,7 +53,8 @@ def export_recordings(work, calibration, *, open_viewer=False):
                 raise ValueError("Reviewed report hash mismatch")
             from vive_correct.human_review import verify_provenance
 
-            verify_provenance(json.loads(report.read_text()))
+            report_doc = json.loads(report.read_text())
+            verify_provenance(report_doc)
             if entry.get("alignment"):
                 prepared = Path(entry["alignment"])
                 if digest(prepared) != entry["alignment_sha256"]:
@@ -62,7 +63,8 @@ def export_recordings(work, calibration, *, open_viewer=False):
                 if (
                     alignment["source_report_sha256"] != entry["report_sha256"]
                     or Path(alignment["episode"]).resolve() != episode
-                    or alignment["camera_calibration"] != json.loads(calibration.read_text())
+                    or alignment["camera_calibration"]
+                    != (report_doc.get("camera_input") or json.loads(calibration.read_text()))
                 ):
                     raise ValueError("Prepared alignment inputs changed; run repair again")
             else:
@@ -88,6 +90,45 @@ def export_recordings(work, calibration, *, open_viewer=False):
             hand_status_path.write_text(
                 json.dumps(hand_status, ensure_ascii=False, indent=2) + "\n"
             )
+            if alignment.get("model") == "eye_reference":
+                if not reviewed_data:
+                    raise ValueError("Eye-reference export requires reviewed Parquets")
+                pending = folder / "recording.partial.rrd"
+                command = [
+                    sys.executable,
+                    "-m",
+                    "vive_correct.eye_rerun",
+                    "--episode",
+                    str(episode),
+                    "--reviewed-data",
+                    str(reviewed_data),
+                    "--alignment",
+                    str(alignment_path),
+                    "--report",
+                    str(report),
+                    "--output",
+                    str(pending),
+                ]
+                with (folder / "render.log").open("w") as stream:
+                    subprocess.run(
+                        command, cwd=ROOT, stdout=stream, stderr=subprocess.STDOUT, check=True
+                    )
+                stats = json.loads(pending.with_suffix(".json").read_text())
+                recording = folder / "recording.rrd"
+                pending.replace(recording)
+                pending.with_suffix(".json").replace(recording.with_suffix(".json"))
+                row.update(
+                    status="complete",
+                    recording=str(recording),
+                    display_mode="eye_reference_world",
+                    vive_correction_displayed=True,
+                    frames=stats["frames"],
+                    skipped_frames=[],
+                    alignment=str(alignment_path),
+                )
+                summary["entries"].append(row)
+                index.write_text(json.dumps(summary, ensure_ascii=False, indent=2) + "\n")
+                continue
             time_path = episode / "data/chunk-000/episode_000000" / f"{DEPTH_KEY}.parquet"
             if not time_path.is_file():
                 from vive_correct.estimate.geometry import VIDEO_KEY

@@ -7,6 +7,20 @@
 * {
   box-sizing: border-box;
 }
+[hidden] {
+  display: none !important;
+}
+.eye-reference .overview,
+.eye-reference #editor > summary,
+.eye-reference #side-controls > label,
+.eye-reference .detail > div:first-child {
+  display: none;
+}
+#shared-hands button[aria-pressed="true"] {
+  background: #087f7a;
+  color: white;
+  border-color: #087f7a;
+}
 body {
   margin: 0;
 }

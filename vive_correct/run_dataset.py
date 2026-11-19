@@ -316,9 +316,25 @@ def main(argv=None):
     )
     parser.set_defaults(**{k: v for k, v in preset.items() if k != "tracker_guided_frames"})
     parser.add_argument("--cv-config", type=Path, help="Partial overrides for config/cv.yaml")
+    parser.add_argument(
+        "--coordinate-mode",
+        choices=("headband", "eye-reference"),
+        default="headband",
+        help="headband: rectified left camera, source tracking world (default); "
+        "eye-reference: eye video, reference-camera origin with Standing axes (CV only)",
+    )
+    parser.add_argument(
+        "--eye-calibration", type=Path, help="Neon intrinsic JSON for eye-reference mode"
+    )
     args = parser.parse_args(argv)
     if args.stage is None:
         args.stage = "features" if args.profile == "cv" else "all"
+    if args.coordinate_mode == "eye-reference" and (
+        args.profile != "cv" or args.stage not in ("features", "gallery", "rerun")
+    ):
+        parser.error("eye-reference requires --profile cv and --stage features/gallery/rerun")
+    if args.eye_calibration and args.coordinate_mode != "eye-reference":
+        parser.error("--eye-calibration requires --coordinate-mode eye-reference")
     if args.profile == "cv":
         args.qwen_review = "off"
         args.tracker_guided_frames = 0
@@ -385,7 +401,12 @@ def main(argv=None):
         ):
             raise ValueError("Tracker-guided recovery requires model review and adaptive search")
         if args.episodes_file:
-            select_episodes(dataset, args.episodes_file)
+            if args.coordinate_mode == "eye-reference":
+                from vive_correct.camera_input import from_args
+
+                select_episodes(dataset, args.episodes_file, from_args(args))
+            else:
+                select_episodes(dataset, args.episodes_file)
         cv2.setNumThreads(1)
         if args.stage == "finish":
             if not all((args.reviewed_baseline, args.review, args.initial_mount)):

@@ -80,7 +80,13 @@ def enrich_pose(pose, sample, K):
         T_camera_local=transform.tolist(),
         axes_generated=True,
         axes_failure_reason=None,
-        local_axes_convention="source_wrist_with_local_calibration",
+        local_axes_convention="source_vive_camera_projection"
+        if sample.get("orientation_policy") == "preserve_source"
+        else "source_vive_shared_extrinsic"
+        if sample.get("shared_extrinsic")
+        else "reviewed_label_basis"
+        if "T_reference_source" in sample
+        else "source_wrist_with_local_calibration",
         orientation_status="human_axis_review",
         physical_axes_verified=False,
         axis_projection=project_axes(origin, rotation, K),
@@ -88,10 +94,13 @@ def enrich_pose(pose, sample, K):
         camera_K=np.asarray(K).tolist(),
         calibration_sample=sample,
     )
+    if sample.get("orientation_policy") == "preserve_source":
+        pose["T_world_local"] = sample["reference_pose"]
+        pose["orientation_policy"] = "preserve_source"
     return pose
 
 
-def preview(episode, side, choice, calibration):
+def preview(episode, side, choice, calibration, context=None, selected=None):
     from pathlib import Path
     import pyarrow.parquet as pq
     from ego_data.vive_origin_alignment import build_alignment
@@ -102,6 +111,12 @@ def preview(episode, side, choice, calibration):
     if side not in ("left", "right"):
         raise ValueError("未知物理手侧")
     axis_angles(choice)
+    if context:
+        from vive_correct.eye_reference import shared_preview
+
+        choices = dict(selected or {})
+        choices[side] = choice
+        return shared_preview(episode, side, choices, context)
     pose, camera = checked_pose(Path(episode), choice, side=side)
     times = pq.read_table(Path(episode) / TIMESTAMP_SUFFIX)["timestamp"].to_numpy()
     frame = choice["frame_index"]

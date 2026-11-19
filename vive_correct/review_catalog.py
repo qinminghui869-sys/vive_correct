@@ -17,7 +17,11 @@ def validate_path(output, path):
 
 def published(output, path):
     report = validate_path(output, path)
+    if report.get("status") == "skipped":
+        return False
     assets = list(report.get("feature_images", {}).values())
+    if report.get("reference_frame_image"):
+        assets.append(report["reference_frame_image"])
     for item in report.get("features", {}).values():
         assets += [item[k] for k in ("frame_image", "clean_frame_image") if k in item]
     if report.get("publication_version"):

@@ -171,12 +171,16 @@ def _missing_feature(side, reason):
 RAW_LEFT_SUFFIX = Path("videos/chunk-000/observation.images.headband_bleft_rgb/episode_000000.mp4")
 
 
-def feature_video(episode):
+def feature_video(episode, context=None):
+    if context:
+        from vive_correct.camera_input import video_suffix
+
+        return episode / video_suffix(context), "eye_undistorted"
     return episode / VIDEO_SUFFIX, "rectified"
 
 
-def feature_video_signature(episode):
-    path, space = feature_video(episode)
+def feature_video_signature(episode, context=None):
+    path, space = feature_video(episode, context) if context else feature_video(episode)
     stat = path.stat() if path.is_file() else None
     return dict(
         path=str(path),
@@ -251,13 +255,15 @@ def progressive_samples(ranges):
         push(mid, hi)
 
 
-def scan_features(episode, output, config, stride=15, max_frames=None, *, search="fast"):
+def scan_features(
+    episode, output, config, stride=15, max_frames=None, *, search="fast", context=None
+):
     if search not in ("fast", "full"):
         raise ValueError("Feature search must be fast or full")
     cv2.setNumThreads(1)
     start = time.perf_counter()
     output.mkdir(parents=True, exist_ok=True)
-    video, video_space = feature_video(episode)
+    video, video_space = feature_video(episode, context) if context else feature_video(episode)
     report = dict(
         video_space=video_space,
         episode=str(episode),
@@ -285,7 +291,22 @@ def scan_features(episode, output, config, stride=15, max_frames=None, *, search
             timeout_s=config.feature_fast_timeout_s if search == "fast" else None,
         ),
     )
+    if context:
+        report["camera_input"] = context
+        report["sampling_order"] = "from_10s_stride_5"
+        report["stride"] = 5
+        report["scan_budget"] = dict(max_samples=100, timeout_s=None, start_s=10)
+        from vive_correct.eye_reference import missing_inputs
+
+        missing = missing_inputs(episode)
+        if missing:
+            report["skip_reason"] = "missing_input: " + ", ".join(missing)
+            result = _finish_features(report, {}, output, config, [], start, report["skip_reason"])
+            result["status"] = "skipped"
+            write_json(output / "features.json", result)
+            return result
     best, pairs, error = {}, [], None
+    joint_frames = []
     candidate_pool = []
     detector_rejections, feature_rejections = Counter(), Counter()
     capture = cv2.VideoCapture(str(video)) if video.is_file() else None
@@ -307,8 +328,25 @@ def scan_features(episode, output, config, stride=15, max_frames=None, *, search
         stopped = False
         last_progress = start
         print(f"Feature scan: {episode.name} search={search}, frames={limit}", flush=True)
-        for phase in feature_scan_phases(limit, fps, stride, config, search=search):
-            if report["scan_phases"] and len(best) == 2:
+        if context:
+            from vive_correct.eye_candidates import sample_indices
+
+            eye_indices = sample_indices(limit, fps)
+            phases = [
+                dict(
+                    name="initial",
+                    ranges=[dict(start=eye_indices.start, stop=eye_indices.stop, stride=5)],
+                )
+            ]
+            if not eye_indices:
+                report["stop_reason"] = "video_ends_before_10s"
+        else:
+            phases = feature_scan_phases(limit, fps, stride, config, search=search)
+        seek_mode = bool(context) or search == "fast"
+        for phase in phases:
+            if report["scan_phases"] and (
+                any(c["label_count"] == 2 for c in joint_frames) if context else len(best) == 2
+            ):
                 break
             if all(r["start"] >= r["stop"] for r in phase["ranges"]):
                 continue
@@ -317,28 +355,31 @@ def scan_features(episode, output, config, stride=15, max_frames=None, *, search
             report["scan_phases"].append(phase)
             if phase["name"] != "initial":
                 capture.set(cv2.CAP_PROP_POS_FRAMES, 0)
-            indices = progressive_samples(phase["ranges"]) if search == "fast" else range(limit)
+            indices = (
+                eye_indices
+                if context
+                else progressive_samples(phase["ranges"])
+                if search == "fast"
+                else range(limit)
+            )
             for index in indices:
-                if search == "fast" and index in seen:
+                if seek_mode and index in seen:
                     continue
-                if search == "fast":
+                if search == "fast" and not context:
                     if report["examined_frames"] >= config.feature_fast_max_samples:
                         report["stop_reason"], stopped = "sample_budget", True
                         break
                     if time.perf_counter() - start >= config.feature_fast_timeout_s:
                         report["stop_reason"], stopped = "time_budget", True
                         break
-                if search == "fast":
+                if seek_mode:
                     if not capture.set(cv2.CAP_PROP_POS_FRAMES, index):
                         error = f"seek_failed_at_{index}"
                         break
                 if not capture.grab():
                     error = f"decode_failed_at_{index}"
                     break
-                if (
-                    search == "fast"
-                    and abs(capture.get(cv2.CAP_PROP_POS_FRAMES) - (index + 1)) > 0.5
-                ):
+                if seek_mode and abs(capture.get(cv2.CAP_PROP_POS_FRAMES) - (index + 1)) > 0.5:
                     error = f"inaccurate_seek_at_{index}"
                     break
                 report["decoded_frames"] += 1
@@ -353,6 +394,10 @@ def scan_features(episode, output, config, stride=15, max_frames=None, *, search
                 if not ok:
                     error = f"decode_failed_at_{index}"
                     break
+                if context:
+                    from vive_correct.camera_input import rectify
+
+                    image = rectify(image, context)
                 report["examined_frames"] += 1
                 report["sampled_frame_indices"].append(index)
                 phase["examined_frames"] += 1
@@ -363,6 +408,7 @@ def scan_features(episode, output, config, stride=15, max_frames=None, *, search
                 detector_rejections.update(detection.get("rejected", {}))
                 found = detection["candidates"]["left"]
                 current = {}
+                frame_items = []
                 for candidate in found:
                     rejection = feature_rejection_reason(
                         candidate, config, allow_truncated_body=True
@@ -370,7 +416,10 @@ def scan_features(episode, output, config, stride=15, max_frames=None, *, search
                     if rejection:
                         feature_rejections[rejection] += 1
                         continue
-                    if candidate["quad"][:, 1].mean() < h * config.feature_min_y_fraction:
+                    if (
+                        not context
+                        and candidate["quad"][:, 1].mean() < h * config.feature_min_y_fraction
+                    ):
                         feature_rejections["above_feature_region"] += 1
                         continue
                     strict = label_metrics(image, candidate["quad"], config)
@@ -390,7 +439,9 @@ def scan_features(episode, output, config, stride=15, max_frames=None, *, search
                         item["standard_rejection"] = "body_extent_unresolved"
                     # Black surroundings/enclosure participate even for review-only candidates.
                     item["selection_score"] = item["score"] * (1 if accepted else 0.75)
-                    candidate_pool.append(_serialize(item))
+                    frame_items.append(item)
+                    if not context:
+                        candidate_pool.append(_serialize(item))
                     cx = candidate["quad"][:, 0].mean()
                     side = "left" if cx < w / 2 else "right"
                     if (
@@ -398,12 +449,22 @@ def scan_features(episode, output, config, stride=15, max_frames=None, *, search
                         or item["selection_score"] > current[side]["selection_score"]
                     ):
                         current[side] = item
-                for side, item in current.items():
-                    if side not in best or item["selection_score"] > best[side]["selection_score"]:
-                        best[side] = item
-                if len(current) == 2:
-                    pairs.append(current)
-                if search == "fast" and len(best) == 2:
+                if context:
+                    from vive_correct.eye_candidates import joint_candidate
+
+                    joint = joint_candidate(image, frame_items, index)
+                    if joint:
+                        joint_frames.append(joint)
+                else:
+                    for side, item in current.items():
+                        if (
+                            side not in best
+                            or item["selection_score"] > best[side]["selection_score"]
+                        ):
+                            best[side] = item
+                    if len(current) == 2:
+                        pairs.append(current)
+                if search == "fast" and not context and len(best) == 2:
                     selected, _ = choose_features(best, pairs, config.pair_quality_ratio)
                     if all(c["status"] == "appearance_candidate" for c in selected.values()):
                         report["stop_reason"], stopped = "bilateral_candidates", True
@@ -425,14 +486,33 @@ def scan_features(episode, output, config, stride=15, max_frames=None, *, search
     report["detector_rejections"] = dict(detector_rejections)
     report["feature_rejections"] = dict(feature_rejections)
     if (
-        search == "fast"
-        and report["examined_frames"] >= config.feature_fast_max_samples
+        (context or search == "fast")
+        and report["examined_frames"] >= (100 if context else config.feature_fast_max_samples)
         and report["stop_reason"] == "scan_complete"
     ):
         report["stop_reason"] = "sample_budget"
     if error:
         report["stop_reason"] = "error"
-    selected, report["mode"] = choose_features(best, pairs, config.pair_quality_ratio)
+    if context:
+        from vive_correct.eye_candidates import rank_frames
+
+        ranked = rank_frames(joint_frames, fps)
+        report["selection_policy"] = "joint_frame_only"
+        report["joint_frames_found"] = len(joint_frames)
+        report["reference_candidates"] = [
+            dict(c, hands={s: _serialize(v) for s, v in c["hands"].items()}) for c in ranked
+        ]
+        report["mode"] = "same_frame" if ranked else "partial"
+        selected = ranked[0]["hands"] if ranked else {}
+        if ranked:
+            report["reference_frame"] = ranked[0]["frame_index"]
+        candidate_pool = [
+            dict(_serialize(item), image_side=s, pair_id=f"frame:{c['frame_index']}")
+            for c in ranked
+            for s, item in c["hands"].items()
+        ]
+    else:
+        selected, report["mode"] = choose_features(best, pairs, config.pair_quality_ratio)
     return _finish_features(report, selected, output, config, candidate_pool, start, error)
 
 
@@ -449,8 +529,20 @@ def _finish_features(report, selected, output, config, candidate_pool, start, er
         center_definition="intersection of diagonals q0-q2 and q1-q3; label centre, not VIVE origin",
     )
     # Reopen at the selected native frames instead of retaining video-sized images in RAM.
-    cap = cv2.VideoCapture(str(video)) if selected else None
+    cap = cv2.VideoCapture(str(video)) if selected or "reference_frame" in report else None
     frames = {}
+    if "reference_frame" in report:
+        from vive_correct.camera_input import rectify
+
+        index = report["reference_frame"]
+        cap.set(cv2.CAP_PROP_POS_FRAMES, index)
+        ok, image = cap.read()
+        if ok:
+            frames[index] = rectify(image, report.get("camera_input"))
+            _write_image(output / f"frame_{index:06d}_clean.jpg", frames[index])
+            report["reference_frame_image"] = str(output / f"frame_{index:06d}_clean.jpg")
+        else:
+            error = f"selected_frame_decode_failed_{index}"
     for side in ("left", "right"):
         candidate = selected.get(side)
         feature_path = output / f"{side}_feature.jpg"
@@ -463,8 +555,10 @@ def _finish_features(report, selected, output, config, candidate_pool, start, er
                     error = f"selected_frame_decode_failed_{index}"
                     candidate = None
                 else:
-                    frames[index] = image
-                    _write_image(output / f"frame_{index:06d}_clean.jpg", image)
+                    from vive_correct.camera_input import rectify
+
+                    frames[index] = rectify(image, report.get("camera_input"))
+                    _write_image(output / f"frame_{index:06d}_clean.jpg", frames[index])
             if candidate is not None:
                 item = _serialize(candidate)
                 q = np.asarray(item["quad"], dtype=float)
@@ -480,7 +574,9 @@ def _finish_features(report, selected, output, config, candidate_pool, start, er
                     json.dumps(
                         [
                             report["video"],
-                            feature_video_signature(Path(report["episode"])),
+                            feature_video_signature(
+                                Path(report["episode"]), report.get("camera_input")
+                            ),
                             side,
                             index,
                             item["quad"],
@@ -579,6 +675,17 @@ def _finish_features(report, selected, output, config, candidate_pool, start, er
         status="error" if error else "features_ready" if not report["missing_hands"] else "partial",
         feature_images={s: str(output / f"{s}_feature.jpg") for s in ("left", "right")},
     )
+    if report.get("camera_input"):
+        report["requires_same_frame"] = True
+        if report["mode"] != "same_frame" and not error:
+            report["status"] = "partial"
+            report["review_note"] = (
+                "未找到高质量标签候选，请人工选择双手分处画面两半的共同帧；不跨帧拼接"
+            )
+        elif report["missing_hands"] and not error:
+            report["review_note"] = (
+                "仅检出单个高质量标签；请确认另一手在画面另一半可见，并在同一帧补标"
+            )
     write_json(output / "candidate_pool.json", candidate_pool)
     write_json(output / "features.json", report)
     return report
@@ -632,6 +739,9 @@ def render_features(output, reports, config_report):
                 + '">人工审核记录模板</a></p>'
             )
         frame_images = sorted({item["frame_image"] for item in report["features"].values()})
+        if report.get("camera_input") and report.get("reference_frame_image"):
+            frame_images = [report["reference_frame_image"]]
+            cards.append("<p>双手共同帧候选；腕部可见线索不代表标签四角或物理侧别已确认。</p>")
         for path in frame_images:
             cards.append(
                 '<img class="frame" loading="lazy" src="'
@@ -653,6 +763,7 @@ def render_features(output, reports, config_report):
         same_frame=sum(r["mode"] == "same_frame" and len(r["features"]) == 2 for r in reports),
         missing_video=sum(r["error"] == "missing_video" for r in reports),
         rectified_video_required=True,
+        joint_frame_candidates=sum(bool(r.get("reference_candidates")) for r in reports),
     )
     write_json(
         delivery / "features_summary.json",
@@ -676,7 +787,10 @@ def run_feature_dataset(args, dataset, output, config):
     if getattr(args, "dry_run", False):
         return _run_feature_dataset(args, dataset, output, config)
     output = Path(output).resolve()
-    for episode in select_episodes(dataset, args.episodes_file):
+    from vive_correct.camera_input import from_args
+
+    context = from_args(args)
+    for episode in select_episodes(dataset, args.episodes_file, context):
         if output == episode or output in episode.parents or episode in output.parents:
             raise ValueError("选帧输出目录必须与源数据分离")
     output.mkdir(parents=True, exist_ok=True)
@@ -684,7 +798,7 @@ def run_feature_dataset(args, dataset, output, config):
         return _run_feature_dataset(args, dataset, output, config)
 
 
-def _scan_published(episode, folder, config, stride, max_frames, search, run_id):
+def _scan_published(episode, folder, config, stride, max_frames, search, run_id, context=None):
     folder.mkdir(parents=True, exist_ok=True)
     with operation_lock(folder), output_lock(folder):
         review = folder / "human_review.json"
@@ -693,11 +807,26 @@ def _scan_published(episode, folder, config, stride, max_frames, search, run_id)
         ):
             raise ValueError("已有人工审核记录，请使用新输出目录重新选帧")
         atomic_json(folder / "scan_status.json", dict(run_id=run_id, status="scanning"))
-        return scan_features(episode, folder, config, stride, max_frames, search=search)
+        return scan_features(
+            episode,
+            folder,
+            config,
+            stride,
+            max_frames,
+            search=search,
+            **({"context": context} if context else {}),
+        )
 
 
 def _run_feature_dataset(args, dataset, output, config):
-    episodes = select_episodes(dataset, args.episodes_file)
+    from vive_correct.camera_input import from_args
+
+    context = from_args(args)
+    episodes = (
+        select_episodes(dataset, args.episodes_file, context)
+        if context
+        else select_episodes(dataset, args.episodes_file)
+    )
     if not episodes:
         raise ValueError("No episodes found")
     stride = args.coarse_stride
@@ -714,12 +843,25 @@ def _run_feature_dataset(args, dataset, output, config):
         episodes=[
             dict(
                 path=str(p),
-                input_signature=input_signature(p),
-                feature_video=feature_video_signature(p),
+                input_signature=input_signature(p, context),
+                feature_video=feature_video_signature(p, context),
             )
             for p in episodes
         ],
     )
+    if context:
+        plan["camera_input"] = context
+        plan["stride"] = 5
+        plan["sampling_policy"] = dict(
+            start_s=10,
+            stride_frames=5,
+            max_samples=100,
+            timeout_s=None,
+            order="chronological",
+            candidate_evidence="high_quality_labels_only",
+            pairing="opposite_image_halves",
+            retain_single_label=True,
+        )
     if getattr(args, "dry_run", False):
         print(json.dumps(plan, ensure_ascii=False, indent=2))
         return 0
@@ -737,6 +879,8 @@ def _run_feature_dataset(args, dataset, output, config):
             paths = list(report["feature_images"].values()) + [
                 v["frame_image"] for v in report["features"].values()
             ]
+            if report.get("reference_frame_image"):
+                paths.append(report["reference_frame_image"])
             paths += [
                 v["clean_frame_image"]
                 for v in report["features"].values()
@@ -767,7 +911,9 @@ def _run_feature_dataset(args, dataset, output, config):
         str(ep): dict(
             episode=str(ep),
             folder=str((output / "features" / ep.relative_to(dataset)).relative_to(output)),
-            status="failed"
+            status="skipped"
+            if reports.get(str(ep), {}).get("status") == "skipped"
+            else "failed"
             if reports.get(str(ep), {}).get("error")
             else "complete"
             if str(ep) in reports
@@ -787,7 +933,15 @@ def _run_feature_dataset(args, dataset, output, config):
     with ProcessPoolExecutor(max_workers=min(args.jobs, max(1, len(pending)))) as pool:
         futures = {
             pool.submit(
-                _scan_published, ep, folder, config, stride, args.max_frames, search, run_id
+                _scan_published,
+                ep,
+                folder,
+                config,
+                stride,
+                args.max_frames,
+                search,
+                run_id,
+                context,
             ): ep
             for ep, folder in pending
         }
@@ -797,7 +951,11 @@ def _run_feature_dataset(args, dataset, output, config):
                 report = future.result()
                 reports[str(ep)] = report
                 rows[str(ep)].update(
-                    status="failed" if report.get("error") else "complete",
+                    status="skipped"
+                    if report.get("status") == "skipped"
+                    else "failed"
+                    if report.get("error")
+                    else "complete",
                     error=report.get("error"),
                     elapsed_s=report.get("seconds"),
                 )

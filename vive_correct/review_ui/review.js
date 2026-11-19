@@ -24,6 +24,7 @@ const statuses = {
 let current = null,
   side = "left",
   bitmap = null,
+  bitmapKey = null,
   dirty = false,
   loading = false;
 let frameRequest = 0,
@@ -35,6 +36,26 @@ let episodeRequest = 0,
 let jobs = new Map(),
   episodeRows = [];
 const submittedDrafts = new Map();
+function eyeMode() {
+  return current?.coordinate_mode === "eye-reference";
+}
+// Changing the shared frame invalidates only annotations made on another frame.
+function setReferenceFrame(frame) {
+  for (const s of eyeMode() ? ["left", "right"] : [side]) {
+    const c = current.selected[s];
+    if (c.frame_index === frame) continue;
+    Object.assign(c, {
+      frame_index: frame,
+      quad: [],
+      candidate_id: null,
+      status: "pending",
+      physical_side: "unknown",
+      source: "manual",
+    });
+    dirty = true;
+    refreshAxes(s);
+  }
+}
 function currentBusy() {
   return Boolean(current && jobs.get(current.id)?.running);
 }
@@ -46,12 +67,25 @@ const axisTickets = { left: 0, right: 0 };
 const axisControllers = { left: null, right: null };
 function axisKey(s) {
   const c = current.selected[s];
-  return JSON.stringify([current.id, s, c.frame_index, c.quad, c.axis_angles_deg || [0, 0, 0]]);
+  return JSON.stringify([
+    current.id,
+    s,
+    ...(eyeMode()
+      ? ["left", "right"].map((hand) => {
+          const item = current.selected[hand];
+          return [item.frame_index, item.quad, item.axis_angles_deg || [0, 0, 0]];
+        })
+      : [c.frame_index, c.quad, c.axis_angles_deg || [0, 0, 0]]),
+  ]);
 }
 function projection(s) {
   return axes[s]?.key === axisKey(s) ? axes[s].data?.axis_projection : null;
 }
-function refreshAxes(s) {
+function refreshAxes(s, paired = false) {
+  if (eyeMode() && !paired) {
+    for (const hand of ["left", "right"]) refreshAxes(hand, true);
+    return;
+  }
   clearTimeout(axisTimers[s]);
   axisControllers[s]?.abort();
   const ticket = ++axisTickets[s],
@@ -72,6 +106,7 @@ function refreshAxes(s) {
           quad: c.quad,
           axis_angles_deg: c.axis_angles_deg || [0, 0, 0],
           axis_convention: "intrinsic_XYZ_degrees",
+          ...(eyeMode() ? { selected: current.selected } : {}),
         },
         controller.signal,
       );
@@ -83,7 +118,7 @@ function refreshAxes(s) {
       axes[s] = { key, error: error.message };
     }
     drawOverview(s);
-    if (s === side) draw();
+    if (s === side || eyeMode()) draw();
     updateStatus();
   }, 180);
 }
@@ -180,9 +215,26 @@ function markEdited() {
   choice().status = "pending";
   choice().physical_side = "unknown";
   choice().source = "manual";
+  if (eyeMode()) {
+    for (const c of Object.values(current.selected)) {
+      c.status = "pending";
+      c.physical_side = "unknown";
+    }
+  }
   refreshAxes(side);
   updateStatus();
   drawOverview(side);
+}
+function sharedFitText(data) {
+  const fit = data?.shared_fit;
+  if (!fit) return "坐标轴已更新 · 轴长 4 cm";
+  const errors = Object.entries(fit.residuals)
+    .map(
+      ([s, r]) =>
+        `${names[s]} ${(r.position_m * 1000).toFixed(1)} mm / ${r.rotation_deg.toFixed(1)}°`,
+    )
+    .join("；");
+  return `${fit.provisional ? "单侧临时外参，需补齐另一侧" : fit.consistent ? "共同外参" : "共同外参不一致，无法通过审核"} · ${errors}`;
 }
 function updateStatus() {
   const controls = document.querySelectorAll("section button, section input, section select");
@@ -201,6 +253,14 @@ function updateStatus() {
       delete control.dataset.waiting;
     }
   }
+  const eyeMode = current.coordinate_mode === "eye-reference";
+  $("axis-title").textContent = eyeMode
+    ? "相机外参安装方向 · 输出保留原轴向 · 红 X / 绿 Y / 蓝 Z"
+    : "坐标轴校准 · 本地内禀 XYZ · 红 X / 绿 Y / 蓝 Z";
+  $("axis-help").textContent = eyeMode
+    ? "输出仅将原点移至参考眼动相机，保留原 Standing 轴向与 Vive 姿态。画面显示原 Vive 三轴经相机投影的方向；安装角度仅约束相机外参，不旋转输出位姿。修改一侧会更新双手投影。标签中心暂近似设备原点。"
+    : "原点为标签中心；初始方向来自源腕部。旋转和标签偏移将随腕部应用到整段及手部关节。";
+  $("axis-reset").textContent = eyeMode ? "清零安装方向修正" : "恢复源方向";
   $("axis-controls").disabled = loading || currentBusy() || saving;
   const cornerPose = axes[side]?.key === axisKey(side) ? axes[side].data : null;
   $("axis-from-corners").disabled = !cornerPose?.corner_correction;
@@ -211,15 +271,23 @@ function updateStatus() {
       : "";
   $("axis-status").textContent =
     axes[side]?.key === axisKey(side)
-      ? axes[side].error || "坐标轴已更新 · 轴长 4 cm"
+      ? axes[side].error || sharedFitText(axes[side].data)
       : "坐标轴待计算";
   $("hint").textContent = currentBusy()
     ? "本条数据正在后台处理，可切换到其他数据继续审核。"
     : current.video_error ||
       (dirty ? "有未保存修改，请检查后确认；暂存不代表通过。" : current.pending_reason) ||
       "审核依据已保存，可按需导出 RRD。";
+  if (current.coordinate_mode === "eye-reference")
+    $("hint").textContent += " 眼动固定参考系：双手须同帧；请确认标签身份、50×30 mm 尺寸及轴向。";
   $("side-status").textContent =
     names[side] + "：" + (statuses[choice().status] || choice().status);
+  $("shared-status").textContent =
+    `帧 ${choice().frame_index} · 正在调整${names[side]} · ` +
+    ["left", "right"].map((s) => names[s] + " " + statuses[current.selected[s].status]).join(" / ");
+  for (const s of ["left", "right"])
+    $("shared-" + s).setAttribute("aria-pressed", String(s === side));
+  $("accept").textContent = eyeMode && side === "left" ? "确认左手并调整右手" : "确认此侧并保存";
   $("saved-state").textContent =
     (dirty ? "有未保存修改 · " : "已保存 · ") +
     Object.entries(current.selected)
@@ -229,12 +297,20 @@ function updateStatus() {
     $(id).disabled = loading || currentBusy() || saving;
   const hasPreviews = ["left", "right"].every(
     (s) =>
-      previewKeys[s] === `${current.id}:${current.selected[s].frame_index}` &&
-      previews[s] &&
+      (eyeMode
+        ? bitmap && bitmapKey === `${current.id}:${current.selected[s].frame_index}`
+        : previewKeys[s] === `${current.id}:${current.selected[s].frame_index}` && previews[s]) &&
       current.selected[s].quad?.length === 4,
   );
   const hasAxes = ["left", "right"].every((s) => Boolean(projection(s)));
-  $("approve").disabled = loading || currentBusy() || saving || !hasPreviews || !hasAxes;
+  const sharedFit = axes[side]?.data?.shared_fit;
+  $("approve").disabled =
+    loading ||
+    currentBusy() ||
+    saving ||
+    !hasPreviews ||
+    !hasAxes ||
+    (eyeMode && (!sharedFit || sharedFit.provisional || !sharedFit.consistent));
   $("accept").disabled ||= !projection(side);
   $("approve").textContent = currentBusy()
     ? statuses[jobs.get(current.id).status] || "后台处理中"
@@ -254,6 +330,8 @@ function updateStatus() {
     "clear",
     "edit-left",
     "edit-right",
+    "shared-left",
+    "shared-right",
   ])
     $(id).disabled = currentBusy() || saving;
   for (const s of ["left", "right"])
@@ -308,29 +386,44 @@ async function openEpisode(id) {
   current = submittedDrafts.has(id) ? structuredClone(submittedDrafts.get(id)) : data;
   Object.assign(current, {
     candidates: data.candidates,
+    reference_candidates: data.reference_candidates || [],
     frame_count: data.frame_count,
     image_size: data.image_size,
   });
   dirty = submittedDrafts.has(id) && jobs.get(id)?.status === "failed";
   side = "left";
   $("side").value = side;
-  $("episode-title").textContent = data.episode;
+  document.body.classList.toggle("eye-reference", eyeMode());
+  $("shared-hands").hidden = !eyeMode();
+  const viewer = canvas.parentElement;
+  if (eyeMode()) $("axis-controls").before(viewer);
+  else $("axis-controls").after(viewer);
+  if (eyeMode() && current.selected.left.frame_index !== current.selected.right.frame_index) {
+    const anchor = current.selected.left.quad?.length ? "left" : "right";
+    setReferenceFrame(current.selected[anchor].frame_index);
+    message("原候选不在同一帧：已统一参考帧，另一侧需在当前画面重新标注；暂存后生效。");
+  }
+  $("episode-title").textContent =
+    data.episode +
+    (data.coordinate_mode === "eye-reference" ? " · 眼动固定参考系（双手须同帧）" : "");
   $("hint").textContent =
     data.video_error || data.pending_reason || "审核依据已保存，可按需导出 RRD。";
   $("reviewer").value =
     data.reviewer || localStorage.getItem("vive-reviewer") || data.default_reviewer || "";
   $("frame-count").textContent = `共 ${data.frame_count} 帧`;
   $("timeline").max = $("frame").max = Math.max(0, data.frame_count - 1);
-  $("candidate").replaceChildren(new Option("选择候选…", ""));
-  data.candidates.forEach((c) =>
+  $("candidate").replaceChildren(new Option(eyeMode() ? "选择双手共同帧…" : "选择候选…", ""));
+  (eyeMode() ? current.reference_candidates : data.candidates).forEach((c) =>
     $("candidate").add(
       new Option(
-        `帧 ${c.frame_index} · ${c.image_side ? "图像侧提示 " + names[c.image_side] : "候选"}`,
+        eyeMode()
+          ? `帧 ${c.frame_index} · ${c.label_count === 2 ? "双标签共同帧" : "单标签 · 另一手待确认"}`
+          : `帧 ${c.frame_index} · ${c.image_side ? "图像侧提示 " + names[c.image_side] : "候选"}`,
         c.candidate_id,
       ),
     ),
   );
-  $("editor").open = false;
+  $("editor").open = eyeMode();
   for (const s of ["left", "right"]) {
     refreshAxes(s);
     previews[s]?.close();
@@ -343,6 +436,7 @@ async function openEpisode(id) {
   await listEpisodes();
 }
 async function loadPreview(s) {
+  if (eyeMode()) return;
   const id = current.id,
     frame = current.selected[s].frame_index,
     ticket = episodeRequest;
@@ -372,8 +466,36 @@ async function loadPreview(s) {
   drawOverview(s);
   updateStatus();
 }
+function paintHand(context, s, scale = 1) {
+  const data = axes[s]?.key === axisKey(s) ? axes[s].data : null;
+  const points = data?.hand_projection;
+  if (!points) return;
+  context.save();
+  context.strokeStyle = context.fillStyle = s === "left" ? "#1ed2ff" : "#f05adc";
+  context.lineWidth = 2 * scale;
+  for (const start of [1, 5, 9, 13, 17]) {
+    const chain = [0, start, start + 1, start + 2, start + 3];
+    for (let i = 1; i < chain.length; i++) {
+      const a = points[chain[i - 1]],
+        b = points[chain[i]];
+      if (!a || !b) continue;
+      context.beginPath();
+      context.moveTo(...a);
+      context.lineTo(...b);
+      context.stroke();
+    }
+  }
+  for (const p of points) {
+    if (!p) continue;
+    context.beginPath();
+    context.arc(...p, 3 * scale, 0, Math.PI * 2);
+    context.fill();
+  }
+  context.restore();
+}
+
 function drawOverview(s) {
-  if (!current) return;
+  if (!current || eyeMode()) return;
   const image = previews[s],
     selected = current.selected[s];
   const full = $("overview-" + s),
@@ -395,6 +517,7 @@ function drawOverview(s) {
   fc.drawImage(image, 0, 0);
   paint(fc, selected.quad, full.width / Math.max(1, full.getBoundingClientRect().width));
   paintAxes(fc, projection(s), full.width / Math.max(1, full.getBoundingClientRect().width));
+  paintHand(fc, s, full.width / Math.max(1, full.getBoundingClientRect().width));
   drawCrop(cc, crop, image, selected.quad, true, projection(s));
 }
 function drawCrop(context, target, image, points, overlay = true, axesProjection = null) {
@@ -433,28 +556,39 @@ function drawCrop(context, target, image, points, overlay = true, axesProjection
   }
 }
 async function editSide(s) {
+  if (loading || saving || currentBusy()) return;
+  dragging = -1;
   side = s;
   $("side").value = s;
   $("editor").open = true;
   await showChoice();
-  $("editor").scrollIntoView({ block: "start" });
+  if (!eyeMode()) $("editor").scrollIntoView({ block: "start" });
 }
 async function showChoice() {
   showAngles();
   refreshAxes(side);
   $("frame").value = $("timeline").value = choice().frame_index;
   $("notes").value = choice().notes || "";
-  $("candidate").value = choice().candidate_id || "";
+  $("candidate").value = eyeMode()
+    ? current.reference_candidates.find((c) => c.frame_index === choice().frame_index)
+        ?.candidate_id || ""
+    : choice().candidate_id || "";
   updateStatus();
   await Promise.all([loadFrame(), loadPreview(side)]);
 }
 async function loadFrame() {
+  const key = `${current.id}:${choice().frame_index}`;
+  if (eyeMode() && bitmap && bitmapKey === key) {
+    draw();
+    return;
+  }
   const ticket = ++frameRequest,
     id = current.id,
     frame = choice().frame_index;
   loading = true;
   bitmap?.close();
   bitmap = null;
+  bitmapKey = null;
   draw();
   updateStatus();
   try {
@@ -466,6 +600,7 @@ async function loadFrame() {
       return;
     }
     bitmap = image;
+    bitmapKey = key;
     canvas.width = image.width;
     canvas.height = image.height;
     resizeCanvas();
@@ -481,7 +616,7 @@ async function goFrame(frame) {
   if (!Number.isInteger(frame) || frame < 0 || frame >= current.frame_count)
     throw new Error("帧号超出视频范围");
   if (frame === choice().frame_index) return;
-  Object.assign(choice(), { frame_index: frame, quad: [], candidate_id: null });
+  setReferenceFrame(frame);
   markEdited();
   await showChoice();
 }
@@ -543,6 +678,27 @@ function draw() {
   if (!bitmap || !current) return;
   ctx.drawImage(bitmap, 0, 0);
   const points = choice().quad || [];
+  if (eyeMode() && $("overlay").checked) {
+    const other = side === "left" ? "right" : "left";
+    const scale = canvas.width / Math.max(1, canvas.getBoundingClientRect().width);
+    ctx.save();
+    ctx.globalAlpha = 0.45;
+    paint(ctx, current.selected[other].quad || [], scale);
+    paintAxes(ctx, projection(other), scale);
+    paintHand(ctx, other, scale);
+    ctx.restore();
+    for (const s of [other, side]) {
+      const p = current.selected[s].quad?.[0];
+      if (!p) continue;
+      ctx.font = `bold ${16 * scale}px sans-serif`;
+      const label = names[s] + (s === side ? " · 调整中" : "");
+      ctx.lineWidth = 4 * scale;
+      ctx.strokeStyle = "#101a20";
+      ctx.strokeText(label, p[0], p[1] - 28 * scale);
+      ctx.fillStyle = s === "left" ? "#1ed2ff" : "#f05adc";
+      ctx.fillText(label, p[0], p[1] - 28 * scale);
+    }
+  }
   if ($("overlay").checked)
     paint(ctx, points, canvas.width / Math.max(1, canvas.getBoundingClientRect().width));
   if ($("overlay").checked)
@@ -551,6 +707,8 @@ function draw() {
       projection(side),
       canvas.width / Math.max(1, canvas.getBoundingClientRect().width),
     );
+  if ($("overlay").checked)
+    paintHand(ctx, side, canvas.width / Math.max(1, canvas.getBoundingClientRect().width));
   $("coordinates").textContent = points.length
     ? points.map(([x, y], i) => `q${i} (${x.toFixed(1)}, ${y.toFixed(1)})`).join(" · ")
     : "尚未标注四角";
@@ -651,6 +809,8 @@ $("notes").oninput = () => {
 };
 $("edit-left").onclick = () => guard(() => editSide("left"));
 $("edit-right").onclick = () => guard(() => editSide("right"));
+$("shared-left").onclick = () => guard(() => editSide("left"));
+$("shared-right").onclick = () => guard(() => editSide("right"));
 $("editor").ontoggle = resizeCanvas;
 $("previous").onclick = () => guard(() => goFrame(choice().frame_index - 1));
 $("next").onclick = () => guard(() => goFrame(choice().frame_index + 1));
@@ -661,6 +821,29 @@ $("frame").onkeydown = (e) => {
 $("timeline").onchange = () => guard(() => goFrame(Number($("timeline").value)));
 $("candidate").onchange = () =>
   guard(async () => {
+    if (eyeMode()) {
+      const frame = current.reference_candidates.find(
+        (c) => c.candidate_id === $("candidate").value,
+      );
+      if (!frame) return;
+      setReferenceFrame(frame.frame_index);
+      for (const s of ["left", "right"]) {
+        const item = frame.hands[s];
+        Object.assign(current.selected[s], {
+          frame_index: frame.frame_index,
+          quad: structuredClone(item?.quad || []),
+          candidate_id: item?.candidate_id || null,
+          status: "pending",
+          physical_side: "unknown",
+          source: "manual",
+        });
+        refreshAxes(s);
+      }
+      dirty = true;
+      await showChoice();
+      message("已切换共同参考帧；请确认两手分处画面两半，再依次核对或补标四角。");
+      return;
+    }
     const c = current.candidates.find((c) => c.candidate_id === $("candidate").value);
     if (!c) return;
     Object.assign(choice(), {
@@ -708,7 +891,12 @@ $("swap").onclick = () =>
     await Promise.all([loadPreview("left"), loadPreview("right")]);
     await showChoice();
   });
-$("accept").onclick = () => guard(() => save("accepted"));
+$("accept").onclick = () =>
+  guard(async () => {
+    if (loading || saving || currentBusy()) return;
+    await save("accepted");
+    if (eyeMode() && side === "left") await editSide("right");
+  });
 $("reject").onclick = () => guard(() => save("rejected"));
 $("save").onclick = () => guard(() => save());
 $("approve").onclick = () =>
@@ -765,7 +953,7 @@ async function poll() {
     const counts = {};
     for (const row of scan.entries) counts[row.status] = (counts[row.status] || 0) + 1;
     $("scan-progress").textContent = scan.total
-      ? `选帧 ${counts.complete || 0}/${scan.total} 完成 · ${counts.scanning || 0} 扫描中 · ${counts.queued || 0} 等待 · ${(counts.failed || 0) + (counts.interrupted || 0)} 失败或中断`
+      ? `选帧 ${counts.complete || 0}/${scan.total} 完成 · ${counts.skipped || 0} 跳过 · ${counts.scanning || 0} 扫描中 · ${counts.queued || 0} 等待 · ${(counts.failed || 0) + (counts.interrupted || 0)} 失败或中断`
       : "等待选帧结果；也可加载已完成的输出目录。";
     $("scan-errors").textContent = [
       ...scan.entries.filter((r) => r.error).map((r) => `${r.episode}：${r.error}`),
@@ -851,6 +1039,11 @@ guard(async () => {
   if (first) await openEpisode(first.id);
   else updateStatus();
   await poll();
-  message("检查左右参考图，点击「通过审核」保存依据；需要时单独导出 RRD。");
+  if (!dirty)
+    message(
+      eyeMode()
+        ? "在同一参考帧中依次调整左手、右手，再通过审核；切换手侧会保留当前修改，换帧需重新标注双手。"
+        : "检查左右参考图，点击「通过审核」保存依据；需要时单独导出 RRD。",
+    );
 });
 setInterval(() => guard(poll), 1000);

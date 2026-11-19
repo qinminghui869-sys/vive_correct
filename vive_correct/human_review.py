@@ -9,7 +9,7 @@ import numpy as np
 import pyarrow.parquet as pq
 
 from vive_correct.batch.report_io import digest
-from vive_correct.dataset import TIMESTAMP_SUFFIX, VIDEO_SUFFIX, input_signature
+from vive_correct.dataset import input_signature
 from vive_correct.estimate.geometry import (
     VIDEO_KEY,
     Camera,
@@ -52,18 +52,31 @@ def source_signature(episode):
             else:
                 stat = p.stat()
                 result[str(relative)] = [stat.st_size, stat.st_mtime_ns]
+    journal = episode / ".vive_rewrite_journal.json"
+    if journal.exists():
+        result[journal.name] = {"sha256": digest(journal)}
     return result
 
 
-def decode_frame(episode, index):
-    video = Path(episode) / VIDEO_SUFFIX
-    return cached_file(("frame", index), video, lambda: _decode_frame(episode, index))
+def decode_frame(episode, index, context=None):
+    from vive_correct.camera_input import video_suffix, verify
+    import json
+
+    verify(context)
+    video = Path(episode) / video_suffix(context)
+    return cached_file(
+        ("frame", index, json.dumps(context, sort_keys=True)),
+        video,
+        lambda: _decode_frame(episode, index, context),
+    )
 
 
-def _decode_frame(episode, index):
+def _decode_frame(episode, index, context=None):
     if type(index) is not int or index < 0:
         raise ValueError("帧号必须为从 0 开始的非负整数")
-    video = Path(episode) / VIDEO_SUFFIX
+    from vive_correct.camera_input import video_suffix, rectify
+
+    video = Path(episode) / video_suffix(context)
     capture = cv2.VideoCapture(str(video))
     try:
         if not capture.isOpened():
@@ -75,15 +88,24 @@ def _decode_frame(episode, index):
         ok, frame = capture.read()
         if not ok or abs(capture.get(cv2.CAP_PROP_POS_FRAMES) - (index + 1)) > 0.5:
             raise ValueError(f"无法准确解码第 {index} 帧")
-        return frame, count
+        return rectify(frame, context), count
     finally:
         capture.release()
 
 
-def checked_pose(episode, choice, *, side=None):
-    image, _ = decode_frame(episode, choice.get("frame_index"))
-    camera_path = Path(episode) / "calibrations/rectify_params.yaml"
-    camera = cached_file("camera", camera_path, lambda: Camera.load(camera_path))
+def checked_pose(episode, choice, *, side=None, context=None):
+    image, _ = (
+        decode_frame(episode, choice.get("frame_index"), context)
+        if context
+        else decode_frame(episode, choice.get("frame_index"))
+    )
+    if context:
+        from vive_correct.camera_input import camera as eye_camera
+
+        camera = eye_camera(context)
+    else:
+        camera_path = Path(episode) / "calibrations/rectify_params.yaml"
+        camera = cached_file("camera", camera_path, lambda: Camera.load(camera_path))
     height, width = image.shape[:2]
     if camera.resolution != (width, height):
         raise ValueError("视频分辨率与相机标定不一致")
@@ -129,13 +151,20 @@ class ReviewStore:
             raise ValueError("未知数据编号")
         return self.paths[index]
 
+    def context(self, index):
+        context = read_json(self.path(index)).get("camera_input")
+        from vive_correct.camera_input import verify
+
+        verify(context)
+        return context
+
     def binding(self, index):
         path = self.path(index)
         episode = Path(read_json(path)["episode"]).resolve()
         # Nanosecond mtimes exceed JavaScript's safe integer range; round trips must be exact.
         signature = {
             name: [str(v) for v in value] if value is not None else None
-            for name, value in input_signature(episode).items()
+            for name, value in input_signature(episode, self.context(index)).items()
         }
         return dict(features_sha256=digest(path), input_signature=signature)
 
@@ -152,6 +181,46 @@ class ReviewStore:
                 dict(value, candidate_id=f"pool:{i}") for i, value in enumerate(read_json(pool))
             ]
         return items
+
+    def reference_candidates(self, index):
+        """Frame-level eye choices; legacy single-sided candidates are not offered."""
+        report = read_json(self.path(index))
+        if not report.get("camera_input"):
+            return []
+        frames = report.get("reference_candidates")
+        if frames is None:
+            features = report.get("features", {})
+            frames = []
+            if (
+                set(features) == set(SIDES)
+                and len({c["frame_index"] for c in features.values()}) == 1
+            ):
+                frames = [
+                    dict(
+                        frame_index=features["left"]["frame_index"],
+                        hands=features,
+                        label_count=2,
+                        evidence="legacy_joint_labels",
+                    )
+                ]
+        result = []
+        candidates = self.candidates(index)
+        for frame in frames:
+            hands = {}
+            for side, item in frame["hands"].items():
+                match = next(
+                    (
+                        c
+                        for c in candidates
+                        if c.get("image_side") == side
+                        and c["frame_index"] == frame["frame_index"]
+                        and np.array_equal(c["quad"], item["quad"])
+                    ),
+                    None,
+                )
+                hands[side] = dict(item, candidate_id=match["candidate_id"] if match else None)
+            result.append(dict(frame, hands=hands, candidate_id=f"frame:{frame['frame_index']}"))
+        return result
 
     def load(self, index):
         path = self.path(index)
@@ -172,7 +241,10 @@ class ReviewStore:
             choice = dict(
                 selected.get(side)
                 or dict(
-                    frame_index=old.get("frame_index", candidate.get("frame_index", 0)),
+                    frame_index=old.get(
+                        "frame_index",
+                        candidate.get("frame_index", report.get("reference_frame", 0)),
+                    ),
                     quad=old.get("corrected_quad_px") or candidate.get("quad", []),
                     candidate_id=f"feature:{side}" if candidate else None,
                     source="automatic" if candidate else "manual",
@@ -201,7 +273,10 @@ class ReviewStore:
             reason = "输入或特征报告已变化，请重新确认双手后导出"
         else:
             reason = "、".join(pending) + "尚未确认通过；请检查后点击「通过审核」（暂存不代表通过）"
+        if report.get("review_note") and not ready:
+            reason = report["review_note"] + "。" + reason
         return dict(
+            coordinate_mode="eye-reference" if self.context(index) else "headband",
             id=index,
             episode=report["episode"],
             binding=binding,
@@ -251,7 +326,12 @@ class ReviewStore:
                 if status == "accepted":
                     if not reviewer or item.get("physical_side") != side:
                         raise ValueError("通过前请填写审核人并确认物理左右手")
-                    checked_pose(Path(current["episode"]), item, side=side)
+                    checked_pose(
+                        Path(current["episode"]),
+                        item,
+                        side=side,
+                        **({"context": self.context(index)} if self.context(index) else {}),
+                    )
                 candidate = candidates.get(item.get("candidate_id"))
                 automatic = (
                     candidate is not None
@@ -273,6 +353,12 @@ class ReviewStore:
                     reviewed_at=datetime.now(timezone.utc).isoformat(),
                 )
             self.check_distinct(result)
+            if (
+                self.context(index)
+                and all(c["status"] == "accepted" for c in result.values())
+                and result["left"]["frame_index"] != result["right"]["frame_index"]
+            ):
+                raise ValueError("眼动固定参考系要求左右手使用同一参考帧")
             value = dict(
                 schema_version=3,
                 episode=current["episode"],
@@ -335,13 +421,20 @@ class ReviewStore:
         episode = Path(review["episode"]).resolve()
         selected = review["selected"]
         self.check_distinct(selected)
-        times = pq.read_table(episode / TIMESTAMP_SUFFIX)["timestamp"].to_numpy()
+        context = self.context(index)
+        from vive_correct.camera_input import timestamp_suffix
+
+        if context and selected["left"]["frame_index"] != selected["right"]["frame_index"]:
+            raise ValueError("眼动固定参考系要求左右手使用同一参考帧")
+        times = pq.read_table(episode / timestamp_suffix(context))["timestamp"].to_numpy()
         observations = {}
         for side in SIDES:
             choice = selected[side]
             if not choice.get("reviewer"):
                 raise ValueError("审核记录缺少审核人，请重新确认")
-            pose, camera = checked_pose(episode, choice, side=side)
+            pose, camera = checked_pose(
+                episode, choice, side=side, **({"context": context} if context else {})
+            )
             prepare_pose(pose, camera, choice)
             frame = choice["frame_index"]
             if frame >= len(times) or not np.isfinite(times[frame]):
@@ -353,7 +446,8 @@ class ReviewStore:
         review_path = self.path(index).with_name("human_review.json")
         return dict(
             episode=str(episode),
-            video_key=VIDEO_KEY,
+            video_key=context["video_key"] if context else VIDEO_KEY,
+            **({"camera_input": context, "coordinate_mode": "eye-reference"} if context else {}),
             origin="label_center",
             identity="human_reviewed",
             reviewer_type="human",
@@ -369,6 +463,9 @@ class ReviewStore:
 
 def verify_provenance(report):
     """Used again by standalone RRD export; old decisions cannot silently be replayed."""
+    from vive_correct.camera_input import verify
+
+    verify(report.get("camera_input"))
     if "human_review_sha256" not in report:
         return
     if (

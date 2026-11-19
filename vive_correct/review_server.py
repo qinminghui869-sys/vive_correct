@@ -17,7 +17,6 @@ import cv2
 import numpy as np
 
 from vive_correct.human_review import ReviewStore, decode_frame, output_directory
-from vive_correct.dataset import VIDEO_SUFFIX
 from vive_correct.rerun_export import DEFAULT_MOUNT
 from vive_correct.review_actions import export_approved
 from vive_correct.review_bundle import approve, review_state
@@ -150,7 +149,9 @@ class ReviewServer(ThreadingHTTPServer):
         bundle = read_json(pointer) if pointer.exists() else {}
         key = (
             self.entry_version(index),
-            file_stamp(self.calibration),
+            json.dumps(self.store.context(index), sort_keys=True)
+            if self.store.context(index)
+            else file_stamp(self.calibration),
             source_stamp(Path(state["episode"])),
             tuple(file_stamp(p) for p in bundle.get("artifacts", {})),
         )
@@ -241,6 +242,30 @@ class ReviewServer(ThreadingHTTPServer):
         episode = Path(state["episode"])
         with baseline_read(episode):
             stamp = source_stamp(episode)
+            context = self.store.context(index)
+            if context:
+                selected = payload.get("selected")
+                # All geometry and mounting edits affect the shared solution/cache.
+                key = (
+                    "eye_shared_axes_v1",
+                    json.dumps([state["binding"], stamp, context, payload], sort_keys=True),
+                )
+
+                def calculate_shared():
+                    with self.preview_slots:
+                        return preview(
+                            episode,
+                            payload.get("side"),
+                            payload,
+                            self.calibration,
+                            context=context,
+                            selected=selected,
+                        )
+
+                result = deepcopy(CACHE.get(key, calculate_shared))
+                if source_stamp(episode) != stamp:
+                    raise ValueError("预览期间源数据发生变化，请重试")
+                return result
             key = (
                 "axis_geometry",
                 json.dumps(
@@ -267,16 +292,27 @@ class ReviewServer(ThreadingHTTPServer):
 
     def frame_png(self, index, frame):
         episode = Path(self.store.load(index)["episode"])
+        context = self.store.context(index)
 
         def encode():
             with self.frame_slots:
-                image, _ = decode_frame(episode, frame)
+                image, _ = (
+                    decode_frame(episode, frame, context)
+                    if context
+                    else decode_frame(episode, frame)
+                )
                 ok, encoded = cv2.imencode(".png", image)
                 if not ok:
                     raise ValueError("无法编码原帧")
                 return encoded.tobytes()
 
-        return cached_file(("frame_png", frame), episode / VIDEO_SUFFIX, encode)
+        from vive_correct.camera_input import video_suffix
+
+        return cached_file(
+            ("frame_png", frame, json.dumps(context, sort_keys=True)),
+            episode / video_suffix(context),
+            encode,
+        )
 
 
 class ReviewHandler(BaseHTTPRequestHandler):
@@ -363,8 +399,14 @@ class ReviewHandler(BaseHTTPRequestHandler):
                 state = self.server.state(index, full=True)
                 state["default_reviewer"] = getpass.getuser()
                 state["candidates"] = store.candidates(index)
+                state["reference_candidates"] = store.reference_candidates(index)
                 try:
-                    image, count = decode_frame(Path(state["episode"]), 0)
+                    context = store.context(index)
+                    image, count = (
+                        decode_frame(Path(state["episode"]), 0, context)
+                        if context
+                        else decode_frame(Path(state["episode"]), 0)
+                    )
                     state.update(frame_count=count, image_size=[image.shape[1], image.shape[0]])
                 except ValueError as error:
                     state.update(frame_count=0, video_error=str(error))
