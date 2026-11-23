@@ -213,6 +213,14 @@ class ReviewStore:
             binding=binding,
             revision=digest(review_path) if review_path.exists() else None,
             needs_reconfirmation=stale,
+            has_human_review=(
+                saved.get("schema_version") in (2, 3)
+                or bool(saved.get("reviewer"))
+                or any(
+                    r.get("reviewer") or r.get("reviewed_at") for r in saved.get("observations", [])
+                )
+            ),
+            ai_reference=saved.get("ai_reference"),
             selected=choices,
             reviewer=saved.get("reviewer") or "",
             status="excluded" if rejected else "ready" if ready else "pending",
@@ -231,6 +239,18 @@ class ReviewStore:
                 raise ValueError("审核已被修改，请重新加载后操作")
             if payload.get("binding") != current["binding"]:
                 raise ValueError("输入或特征报告已变化，请重新加载并审核")
+            ai_reference = payload.get("ai_reference")
+            if ai_reference:
+                from vive_correct.ai_final_review import load_advice
+
+                advice = load_advice(self.path(index), getattr(self, "ai_calibration", None))
+                if (
+                    not advice
+                    or not advice.get("valid")
+                    or advice.get("status") != "complete"
+                    or advice.get("revision") != ai_reference
+                ):
+                    raise ValueError("AI 建议已变化或失效，请重新加载或恢复原结果")
             reviewer = str(payload.get("reviewer", "")).strip()
             selected = payload.get("selected")
             if not isinstance(selected, dict) or set(selected) != set(SIDES):
@@ -239,6 +259,7 @@ class ReviewStore:
                 not current["needs_reconfirmation"]
                 and selected == current["selected"]
                 and reviewer == current["reviewer"]
+                and ai_reference == current.get("ai_reference")
             ):
                 return current
             candidates = {c["candidate_id"]: c for c in self.candidates(index)}
@@ -288,6 +309,7 @@ class ReviewStore:
                 binding=current["binding"],
                 reviewer=reviewer,
                 selected=result,
+                **({"ai_reference": ai_reference} if ai_reference else {}),
             )
             if self.binding(index) != current["binding"]:
                 raise ValueError("保存期间输入发生变化，请重新加载")
@@ -300,6 +322,7 @@ class ReviewStore:
                 not current["needs_reconfirmation"]
                 and result == current["selected"]
                 and reviewer == current["reviewer"]
+                and ai_reference == current.get("ai_reference")
             ):
                 return current
             with output_lock(self.output, blocking=True):

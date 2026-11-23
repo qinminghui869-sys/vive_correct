@@ -1,6 +1,6 @@
 # 运行与配置
 
-安装与纯 CV 快速开始见 [项目首页](../README.md)。所有命令通过 `python3 -m vive_correct <命令> --help` 查看完整参数。
+安装与快速开始见 [项目首页](../README.md)。所有命令通过 `python3 -m vive_correct <命令> --help` 查看完整参数。
 
 ## 输入要求
 
@@ -25,7 +25,7 @@
 
 `run --profile` 支持三种预设：
 
-- `cv`：OpenCV 检测，无模型调用，默认 `--stage features`。
+- `cv`：OpenCV 选帧，默认 `--stage features`；模型默认关闭，可显式启用 [最终结果 AI 预审](../docs/ai_review.md)。
 - `astra`：默认模型路径，通过已登录的 Codex CLI 调用仓库配置的 `gpt-6-astra`，默认 `--stage all`。
 - `legacy`：API 模型路径，需配置 `openai.local.json` 或环境变量。
 
@@ -40,9 +40,11 @@
 
 审核服务的并发与缓存由独立 CLI 参数控制，见 [并发与响应](../docs/review_rebuild.md#并发与响应)。
 
-常用参数：`--episodes-file FILE` 限定样本；`--dry-run` 预览 `all/features` 计划，不调用模型或生成检测结果；`--initial-mount FILE` 指定外参。CV 扫描与调参见 [纯 CV 指南](../docs/cv_detection.md)。
+常用参数：`--episodes-file FILE` 限定样本；`--dry-run` 预览 `all/features` 计划，不调用模型或生成检测结果；`--initial-mount FILE` 指定外参。CV 扫描与调参见 [CV 选帧指南](../docs/cv_detection.md)。
 
-## 可选模型路径
+## 独立模型候选流程
+
+此流程通过模型生成和复核候选，与 CV 选帧后的最终结果 AI 预审独立。常规人工审核采用首页流程。
 
 ```bash
 python3 -m vive_correct run --dataset /path/to/dataset \
@@ -62,13 +64,13 @@ python3 -m vive_correct run --dataset /path/to/dataset \
 ```text
 <out>/
 ├── run_plan.json、feature_plan.json   # 运行计划与输入绑定，按路径生成
-├── features/                         # CV 候选、图片和人工记录
-├── rejected_episodes.json             # 整条不通过的路径清单
+├── features/                         # CV 候选、图片、AI 建议和人工记录
+├── rejected_episodes.json            # 整条不通过的路径清单
 ├── estimates/                        # 估计与可选 CV 跟踪
 ├── search/、search_refined/           # 模型路径粗扫与补扫
 ├── qwen_reviews/                     # 模型复核（沿用历史目录名）
 ├── batch/delivery/index.html         # 静态展示入口
-└── rerun/                            # 录制索引与日志
+└── rerun/                           # 录制索引与日志
 ```
 
 相同命令可续跑；输入、检测配置或计算代码变化后使用新输出目录。已进入人工审核的特征结果不会被自动重扫覆盖。审核依据包及修正文件目录见 [产物与排查](../docs/review_rebuild.md#产物与排查)。

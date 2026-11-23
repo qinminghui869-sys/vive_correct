@@ -1,6 +1,6 @@
 # 字段与接口
 
-本文定义坐标、人工审核记录和预览接口。操作步骤见 [审核指南](review_rebuild.md)，整段变换公式见 [校准模型](hand_pipeline.md#标签刚性绑定)。模型交付报告与人工审核依据包是不同 schema，不能仅凭同名 `observations.json` 混用。
+本文定义坐标、人工审核记录和预览接口。操作步骤见 [审核指南](user_guide.md)，整段变换公式见 [校准模型](hand_pipeline.md#标签刚性绑定)。模型交付报告与人工审核依据包是不同 schema，不能仅凭同名 `observations.json` 混用。
 
 ## 坐标约定
 
@@ -24,6 +24,18 @@
 ```
 
 角度必须是三个有限数，采用本地内禀 XYZ，`C = Rx(α) Ry(β) Rz(γ)`，右乘源腕部旋转。绕当前轴按钮使用 `C_new = C × R_axis(Δ)` 合成，再转为等效内禀 XYZ 角；手动输入与四角校正使用相同字段；零角度表示恢复源方向。schema 2 加载时保留选择并默认零角度，必须重新审核。
+
+## AI 建议记录
+
+`features/.../ai_review.json` 与人工记录独立；当前 `schema_version=1`、`prompt_version=2`：
+
+- `status`：`running`、`complete` 或 `error`；加载时还可能返回 `stale` 或 `unavailable`。`complete` 仅表示复核结束。
+- `original`、`selected`：原选择和建议选择；`adjusted` 表示是否调整，`human_verified` 始终为 `false`。
+- `rounds`、`issues`、`error`：各轮判断、待人工处理原因及失败信息；`calls` 不超过 2。
+- `input_signature`、`calibration`、`model`、`endpoint`：输入与计算版本绑定、配置路径及模型来源。
+- 加载时附加 `valid` 和 `revision`；版本失效时不能继续以该建议提交审核。
+
+人工记录的可选 `ai_reference` 指向采用的建议修订；人工修改帧、四角或方向后清除该关联。模型响应约束与拼接图布局见 [AI 预审](ai_review.md#输入与处理边界)。
 
 ## 整条不通过记录
 
@@ -86,8 +98,9 @@
 
 数值仅示意格式。成功返回单侧位姿、投影与 `calibration_sample`，并提供四角校正建议：
 
-- `corner_correction`：`axis_angles_deg`、`axis_convention`、`rotation_camera_target`、`geometry_convention`、`plane_ambiguous`、`physical_axes_verified`。
-- `geometry_convention="X_left_Y_up_Z_forward"`：在同一个 PnP 平面上选择最接近图像左／上及远离相机方向的正交右手系，不是设备朝向识别。
+- `corner_correction`：`axis_angles_deg`、`axis_convention`、`rotation_camera_target`、`geometry_convention`、`pnp_axis_convention`、`baseline_local_rotation`、`plane_ambiguous`、`physical_axes_verified`。
+- `pnp_axis_convention`：配置选择的 [PnP 轴定义](../calibrations/README.md#pnp-建议轴)；`baseline_local_rotation` 为标签基准到建议轴的本地右乘矩阵。
+- `geometry_convention`：默认 `X_left_Y_up_Z_forward`；批次转换后为 `X_left_Y_negative_label_normal_Z_tangent`。均不表示已识别设备朝向。
 - 建议无法生成时 `corner_correction=null`，原因在 `corner_correction_error`；有效的手动轴向预览仍可返回。
 
 四角或同步姿态无效时返回 HTTP 400 与 `error`。接口不写人工记录；仅点击“四角校正”才将建议角度应用到草稿。通过审核时重新计算，不信任客户端投影。

@@ -1,4 +1,4 @@
-# 纯 CV 选帧与检测
+# OpenCV 选帧与检测
 
 默认用 OpenCV 快速选择标签参考帧，不调用模型、不运行整段身份跟踪。结果是候选材料，物理左右手与几何仍需人工确认。输入文件见 [运行指南](../vive_correct/README.md#输入要求)，后续操作见 [审核与重建](review_rebuild.md)。
 
@@ -18,7 +18,11 @@ bash scripts/run_cv.sh /path/to/dataset outputs/cv_tracked \
   --stage all --feature-search full --jobs 4
 ```
 
-清单格式见 [指定样本示例](../README.md#只处理指定样本)，路径相对本次数据集根目录填写。
+清单必须是非空 JSON 数组，路径相对本次数据集根目录填写，例如：
+
+```json
+["dining/episode-a", "stove/episode-b"]
+```
 
 省略 `--episodes-file` 处理全部样本；加 `--dry-run` 只预览计划。`--max-frames 120` 将视频限制为前 120 帧，仅适合短片冒烟测试，区别于快速模式在全时段内最多检测 120 帧。
 
@@ -54,6 +58,11 @@ feature_fast_timeout_s: 30.0
 停止原因包括 `bilateral_candidates`、`sample_budget`、`time_budget`、`scan_complete` 和 `error`。单条发布后即可在浏览器审核，无需等整批结束。退出码 0 不代表双侧检出正确或已通过审核。
 
 未跟踪候选标记 `image_half_unverified`，只作画面半区提示。双手可能来自不同帧，不能作为同时刻相对位姿；四角坐标约定见 [字段与接口](observations_schema.md#坐标约定)。
+
+## 可选：AI 检查最终框与 XYZ
+
+`--ai-final-review` 在选帧后异步检查最终框与轴，默认关闭，结果仍需人工审核。
+拼接图输入、Codex/API 配置及批次轴定义见 [AI 预审](ai_review.md)。
 
 ## 检测与可选跟踪
 

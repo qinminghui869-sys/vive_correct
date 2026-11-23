@@ -209,6 +209,76 @@ async function api(url, body, signal) {
 function choice() {
   return current.selected[side];
 }
+function aiGeometry(selected) {
+  return JSON.stringify(
+    ["left", "right"].map((s) => {
+      const c = selected[s];
+      return c ? [c.frame_index, c.quad, c.axis_angles_deg || [0, 0, 0]] : null;
+    }),
+  );
+}
+function aiMatches(advice) {
+  const expected = structuredClone(current.selected);
+  for (const [s, c] of Object.entries(advice.selected || {})) expected[s] = c;
+  return aiGeometry(expected) === aiGeometry(current.selected);
+}
+function updateAI() {
+  const advice = current?.ai_review;
+  $("ai-panel").hidden = !advice;
+  if (!advice) return;
+  const usable = advice.valid && advice.status === "complete";
+  const edited = usable && !aiMatches(advice);
+  if (
+    current.ai_reference &&
+    current.aiAppliedGeometry &&
+    current.aiAppliedGeometry !== aiGeometry(current.selected)
+  )
+    current.ai_reference = null;
+  $("ai-status").textContent = !advice.valid
+    ? "AI 建议已失效或不可用，请人工审核。"
+    : advice.status === "running"
+      ? "AI 正在检查最终框和 XYZ，可继续人工审核。"
+      : advice.status === "error"
+        ? "AI 复核失败，可继续人工审核。"
+        : edited
+          ? "当前选择与 AI 结果不同，原 AI 结论不适用于当前编辑。"
+          : advice.adjusted
+            ? "AI 已调整，待人工确认。轴向仅为标签几何方向。"
+            : "AI 已检查，仍须人工确认四角、物理左右手及 XYZ。";
+  const last = advice.rounds?.at(-1) || {};
+  $("ai-reasons").textContent = [
+    ...Object.entries(last).map(([s, d]) => `${names[s] || s}：${d.reason}`),
+    ...Object.entries(advice.issues || {}).map(([s, reason]) => `${names[s] || "提示"}：${reason}`),
+    advice.error || "",
+  ]
+    .filter(Boolean)
+    .join("；");
+  const locked = loading || saving || currentLocked();
+  $("ai-apply").disabled = locked || !usable || !Object.keys(advice.selected || {}).length;
+  $("ai-original").disabled = locked || !Object.keys(advice.original || {}).length;
+}
+function assignAI(original = false) {
+  const advice = current.ai_review;
+  if (!advice || (!original && (!advice.valid || advice.status !== "complete"))) return;
+  for (const [s, c] of Object.entries(original ? advice.original : advice.selected)) {
+    current.selected[s] = { ...structuredClone(c), status: "pending", physical_side: "unknown" };
+  }
+  current.ai_reference = original ? null : advice.revision;
+  current.aiAppliedGeometry = aiGeometry(current.selected);
+  current.approved = false;
+  dirty = true;
+}
+async function applyAI(original) {
+  if (loading || saving || currentLocked()) return;
+  assignAI(original);
+  for (const s of ["left", "right"]) refreshAxes(s);
+  await Promise.all([loadPreview("left"), loadPreview("right")]);
+  await showChoice();
+  updateStatus();
+}
+$("ai-apply").onclick = () => guard(() => applyAI(false));
+$("ai-original").onclick = () => guard(() => applyAI(true));
+
 function markEdited() {
   dirty = true;
   choice().status = "pending";
@@ -235,6 +305,7 @@ function updateStatus() {
       delete control.dataset.waiting;
     }
   }
+  updateAI();
   $("axis-controls").disabled = loading || currentLocked() || saving;
   const cornerPose = axes[side]?.key === axisKey(side) ? axes[side].data : null;
   $("axis-from-corners").disabled = !cornerPose?.corner_correction;
@@ -242,7 +313,12 @@ function updateStatus() {
     ? "四角方向不可用：" + cornerPose.corner_correction_error
     : cornerPose?.corner_correction?.plane_ambiguous
       ? "标签平面存在多解，请核对方向，必要时换用更清晰的参考帧。"
-      : "";
+      : cornerPose?.corner_correction
+        ? "PnP 轴定义：" +
+          (cornerPose.corner_correction.pnp_axis_convention === "wrist_y_normal"
+            ? "本批 Y 法向（已含局部 X −90°）"
+            : "标签 Z 法向")
+        : "";
   $("axis-status").textContent =
     axes[side]?.key === axisKey(side)
       ? axes[side].error || "坐标轴已更新 · 轴长 4 cm"
@@ -270,7 +346,11 @@ function updateStatus() {
       current.selected[s].quad?.length === 4,
   );
   const hasAxes = ["left", "right"].every((s) => Boolean(projection(s)));
-  $("approve").disabled = loading || currentLocked() || saving || !hasPreviews || !hasAxes;
+  const staleAI =
+    current.ai_reference &&
+    (!current.ai_review?.valid || current.ai_reference !== current.ai_review?.revision);
+  $("approve").disabled =
+    loading || currentLocked() || saving || !hasPreviews || !hasAxes || staleAI;
   $("reject-episode").disabled = currentLocked() || saving;
   $("accept").disabled ||= !projection(side);
   $("approve").textContent = currentBusy()
@@ -357,6 +437,17 @@ async function openEpisode(id) {
     image_size: data.image_size,
   });
   dirty = submittedDrafts.has(id) && jobs.get(id)?.status === "failed";
+  current.aiAppliedGeometry = aiGeometry(current.selected);
+  if (
+    !submittedDrafts.has(id) &&
+    !data.has_human_review &&
+    !data.exclusion &&
+    data.ai_review?.valid &&
+    data.ai_review.status === "complete" &&
+    data.ai_review.adjusted
+  ) {
+    assignAI();
+  }
   side = "left";
   $("side").value = side;
   $("episode-title").textContent = data.episode;
@@ -660,6 +751,7 @@ async function save(status) {
     const result = await api(`/api/review?id=${current.id}`, {
       revision: current.revision,
       binding: current.binding,
+      ai_reference: current.ai_reference,
       reviewer,
       selected,
     });
@@ -777,6 +869,7 @@ $("approve").onclick = () =>
       await api(`/api/approve?id=${id}`, {
         revision: current.revision,
         binding: current.binding,
+        ai_reference: current.ai_reference,
         reviewer,
         selected,
       });
@@ -878,10 +971,11 @@ async function poll() {
         dirty = true;
       }
     }
-    if (current && !dirty && !currentBusy()) {
+    if (current && !currentBusy()) {
       const id = current.id,
         revision = current.revision;
       const latest = await api(`/api/review-state?id=${id}`);
+      if (current?.id === id) current.ai_review = latest.ai_review;
       if (current?.id === id && current.revision === revision && !dirty) {
         current.approved = latest.approved && latest.revision === revision;
         current.exclusion = latest.exclusion;

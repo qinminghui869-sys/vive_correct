@@ -21,13 +21,19 @@ def local_rotation(choice):
     return Rotation.from_euler("XYZ", axis_angles(choice), degrees=True).as_matrix()
 
 
-def corner_correction(pose, camera):
+def corner_correction(pose, camera, convention="label_z_normal"):
     """Use the same PnP plane as the center; resolve rectangle signs by image axes."""
     from vive_correct.estimate.geometry import local_basis, LOCAL_AXES_CONVENTION
 
     rotation = np.asarray(pose["rotation_camera_label"])
     position = np.asarray(pose["pnp_origin_camera_m"])
     target = rotation @ local_basis(rotation, position, camera, require_direction_limits=False)
+    if convention not in ("label_z_normal", "wrist_y_normal"):
+        raise ValueError(f"不支持的 PnP 轴定义: {convention}")
+    conversion = np.eye(3)
+    if convention == "wrist_y_normal":
+        conversion = np.array([[1, 0, 0], [0, 0, 1], [0, -1, 0]])
+    target = target @ conversion
     source = np.asarray(pose["calibration_sample"]["rotation_camera_source"])
     # At gimbal lock SciPy chooses a zero third angle, preserving the rotation.
     with warnings.catch_warnings():
@@ -37,7 +43,13 @@ def corner_correction(pose, camera):
         axis_angles_deg=angles.tolist(),
         axis_convention=CONVENTION,
         rotation_camera_target=target.tolist(),
-        geometry_convention=LOCAL_AXES_CONVENTION,
+        geometry_convention=(
+            LOCAL_AXES_CONVENTION
+            if convention == "label_z_normal"
+            else "X_left_Y_negative_label_normal_Z_tangent"
+        ),
+        pnp_axis_convention=convention,
+        baseline_local_rotation=conversion.tolist(),
         physical_axes_verified=False,
         plane_ambiguous=pose.get("plane_ambiguous", False),
     )
@@ -121,7 +133,10 @@ def preview(episode, side, choice, calibration):
     )
     result = enrich_pose(pose, alignment["samples"][0], camera.K)
     try:
-        result["corner_correction"] = corner_correction(result, camera)
+        from vive_correct.review_io import read_json
+
+        convention = read_json(Path(calibration)).get("pnp_axis_convention", "label_z_normal")
+        result["corner_correction"] = corner_correction(result, camera, convention)
         result["corner_correction_error"] = None
     except ValueError as error:
         result["corner_correction"] = None

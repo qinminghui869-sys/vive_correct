@@ -315,6 +315,11 @@ def main(argv=None):
         help="Use only the coarse pool and full candidate budget, without adaptive search/early stop",
     )
     parser.set_defaults(**{k: v for k, v in preset.items() if k != "tracker_guided_frames"})
+    parser.add_argument(
+        "--ai-final-review",
+        action="store_true",
+        help="Review final CV boxes/axes asynchronously; at most two model calls per episode",
+    )
     parser.add_argument("--cv-config", type=Path, help="Partial overrides for config/cv.yaml")
     args = parser.parse_args(argv)
     if args.stage is None:
@@ -340,6 +345,12 @@ def main(argv=None):
             args.window = defaults.window
     dataset, output = args.dataset.resolve(), args.out.resolve()
     try:
+        if args.ai_final_review and (
+            args.stage != "features" or args.model_jobs < 1 or args.model_timeout < 1
+        ):
+            raise ValueError(
+                "--ai-final-review requires stage features and positive model jobs/timeout"
+            )
         if args.dry_run and args.stage not in ("all", "features"):
             raise ValueError("--dry-run requires --stage all or features")
         if args.baseline_only and (args.stage != "all" or not args.axis_baseline):

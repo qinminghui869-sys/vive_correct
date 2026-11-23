@@ -56,6 +56,7 @@ class ReviewServer(ThreadingHTTPServer):
         CACHE.resize(cache_mib * 1024 * 1024)
         self.store = ReviewStore(output, allow_empty=True)
         self.calibration = Path(calibration)
+        self.store.ai_calibration = self.calibration
         self.token = secrets.token_urlsafe(32)
         self.jobs = {}
         self.job_lock = threading.Lock()
@@ -115,6 +116,7 @@ class ReviewServer(ThreadingHTTPServer):
             file_stamp(p),
             file_stamp(p.with_name("human_review.json")),
             file_stamp(p.with_name("approval.json")),
+            file_stamp(p.with_name("ai_review.json")),
         )
 
     def list_version(self):
@@ -147,6 +149,13 @@ class ReviewServer(ThreadingHTTPServer):
             )
 
     def state(self, index, *, full=False):
+        from vive_correct.ai_final_review import load_advice
+
+        state = self._state(index, full=full)
+        state["ai_review"] = load_advice(self.store.path(index), self.calibration)
+        return state
+
+    def _state(self, index, *, full=False):
         # Polling checks identities, not large-file hashes. Public mutations always
         # perform the original full validation independently of this display cache.
         state = self.store.load(index)

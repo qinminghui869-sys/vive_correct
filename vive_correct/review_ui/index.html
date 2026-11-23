@@ -27,6 +27,14 @@
       <section>
         <h1 id="episode-title">加载中…</h1>
         <p id="hint"></p>
+        <section id="ai-panel" hidden aria-label="AI 最终结果复核">
+          <p id="ai-status" role="status"></p>
+          <p id="ai-reasons"></p>
+          <div class="toolbar">
+            <button id="ai-apply" type="button">应用 AI 建议</button>
+            <button id="ai-original" type="button">查看／恢复原结果</button>
+          </div>
+        </section>
         <div class="overview">
           <article>
             <h2>物理左手 <span id="overview-left-status"></span></h2>
@@ -155,8 +163,8 @@
                 <button id="axis-from-corners" type="button">按四角校正方向</button>
                 <button id="axis-reset" type="button">恢复源方向</button>
                 <p>
-                  四角校正按标签平面取 X 向左、Y 向上、Z
-                  朝相机前方的右手系，并非自动识别设备朝向。应用后可微调；修改四角后需再次点击。
+                  四角校正采用当前挂载配置的 PnP 轴定义；wrist_y_normal 已包含局部 X −90°
+                  转换，无需重复旋转。并非自动识别设备朝向。应用后可微调；修改四角后需再次点击。
                 </p>
                 <p id="corner-axis-status" role="status"></p>
                 <p id="axis-status" role="status"></p>

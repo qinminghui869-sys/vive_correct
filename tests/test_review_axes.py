@@ -38,6 +38,34 @@ class AxisTests(unittest.TestCase):
         self.episode, self.output, self.mount = make_fixture(self.root)
         self.store = ReviewStore(self.output)
 
+    def test_batch_pnp_convention_changes_only_suggested_axes(self):
+        choice = self.store.load(0)["selected"]["left"]
+        legacy = preview(self.episode, "left", choice, self.mount)
+        mount = read_json(self.mount)
+        mount["pnp_axis_convention"] = "wrist_y_normal"
+        atomic_json(self.mount, mount)
+        revised = preview(self.episode, "left", choice, self.mount)
+        old = np.asarray(legacy["corner_correction"]["rotation_camera_target"])
+        new = np.asarray(revised["corner_correction"]["rotation_camera_target"])
+        expected = old @ Rotation.from_euler("X", -90, degrees=True).as_matrix()
+        np.testing.assert_allclose(new, expected, atol=1e-12)
+        np.testing.assert_allclose(new[:, 1], -old[:, 2], atol=1e-12)
+        for key in ("rotation_camera_label", "origin_camera_m", "axis_projection"):
+            self.assertEqual(legacy[key], revised[key])
+        applied = dict(choice, axis_angles_deg=revised["corner_correction"]["axis_angles_deg"])
+        again = preview(self.episode, "left", applied, self.mount)
+        np.testing.assert_allclose(
+            again["calibration_sample"]["rotation_camera_corrected"], new, atol=1e-12
+        )
+        np.testing.assert_allclose(
+            again["corner_correction"]["rotation_camera_target"], new, atol=1e-12
+        )
+        mount["pnp_axis_convention"] = "typo"
+        atomic_json(self.mount, mount)
+        invalid = preview(self.episode, "left", choice, self.mount)
+        self.assertIsNone(invalid["corner_correction"])
+        self.assertIn("PnP", invalid["corner_correction_error"])
+
     def set_rotations(self, stream, angles):
         path = self.episode / DATA / f"observation.{stream}_pose.parquet"
         table = pq.read_table(path)

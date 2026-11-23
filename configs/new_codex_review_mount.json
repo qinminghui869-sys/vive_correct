@@ -1,0 +1,200 @@
+{
+  "T_head_rectified_camera": [
+    [
+      -0.9999613177353984,
+      -0.008310393110406652,
+      0.002881041345749529,
+      0.055
+    ],
+    [
+      0.00666643905747611,
+      -0.5024095861989857,
+      0.86460405174025,
+      0.0
+    ],
+    [
+      -0.005737736764471671,
+      0.8645898131840987,
+      0.5024455525876481,
+      0.068
+    ],
+    [
+      0.0,
+      0.0,
+      0.0,
+      1.0
+    ]
+  ],
+  "head_euler_sequence": "xyz",
+  "head_euler_degrees": true,
+  "assumptions": {
+    "candidate": "A",
+    "head_local_axes": "X left, Y forward, Z down",
+    "world_axes": "X left, Y up, Z forward (user confirmed); original source coordinates unchanged",
+    "reference": "C0 = untilted camera frame, X right Y down Z forward",
+    "translation": "VIVE origin in C0 = [+55,-68,0] mm, specified BEFORE tilt; no forward/backward offset",
+    "rotation": "Camera rotates about its own optical center, downward 30deg about camera X; R_C0_raw = Rx(-30deg)",
+    "rectification": "R1 maps raw camera points to rectified camera; applied R1.T on right",
+    "head_pose": "Existing xyz-degree interpretation retained; acquisition Euler convention still unverified",
+    "hand_points": "Source world hand and wrist positions; old wrist corrections and thinning disabled for comparison"
+  },
+  "T_head_raw_camera": [
+    [
+      -1.0,
+      0.0,
+      0.0,
+      0.055
+    ],
+    [
+      0.0,
+      -0.49999999999999994,
+      0.8660254037844387,
+      0.0
+    ],
+    [
+      0.0,
+      0.8660254037844387,
+      0.49999999999999994,
+      0.068
+    ],
+    [
+      0.0,
+      0.0,
+      0.0,
+      1.0
+    ]
+  ],
+  "vive_origin_in_untilted_camera_m": [
+    0.055,
+    -0.068,
+    0.0
+  ],
+  "vive_origin_in_rectified_camera_m": [
+    0.05538803857543099,
+    -0.05833503567544635,
+    -0.034324754849976304
+  ],
+  "schema_version": "1.0",
+  "saved_date": "2026-11-10",
+  "dataset": "L3-001-2026-10-27-13-47-37",
+  "status": "User-selected installation approximation (A); not independently calibrated",
+  "translation_unit": "meter",
+  "matrix_layout": "4x4 row-major arrays; multiply homogeneous column vectors on the left",
+  "transform_direction": "rectified left camera -> head VIVE local frame",
+  "equation": "p_head = R_head_camera @ p_camera + t_head_camera",
+  "trajectory_equation": "T_world_camera(t) = T_world_head(t) @ T_head_rectified_camera",
+  "coordinate_frames": {
+    "world": {
+      "x_positive": "left",
+      "y_positive": "up",
+      "z_positive": "forward",
+      "handedness": "right",
+      "source_values_unchanged": true
+    },
+    "head_vive": {
+      "x_positive": "left",
+      "y_positive": "forward",
+      "z_positive": "down",
+      "handedness": "right",
+      "mounting_candidate": "A"
+    },
+    "left_camera_raw": {
+      "x_positive": "image right",
+      "y_positive": "image down",
+      "z_positive": "optical forward",
+      "handedness": "right"
+    },
+    "left_camera_rectified": {
+      "x_positive": "rectified image right",
+      "y_positive": "rectified image down",
+      "z_positive": "rectified optical forward",
+      "handedness": "right"
+    },
+    "untilted_camera_reference": {
+      "x_positive": "right",
+      "y_positive": "down",
+      "z_positive": "forward",
+      "description": "Reference before downward camera tilt; not the final camera frame"
+    }
+  },
+  "mounting_measurement": {
+    "vive_origin_in_untilted_camera_mm": [
+      55,
+      -68,
+      0
+    ],
+    "camera_downward_tilt_degrees": 30,
+    "rotation_pivot": "camera optical center",
+    "R_untilted_from_raw_camera": "Rx(-30 degrees)",
+    "rectification_source": "rectify_params.yaml: R1 maps raw-camera points to rectified-camera points",
+    "rotation_chain": "R_head_rectified = R_head_untilted @ Rx(-30deg) @ R1.T"
+  },
+  "T_rectified_camera_head": [
+    [
+      -0.9999613177353986,
+      0.006666439057476105,
+      -0.00573773676447166,
+      0.05538803857543101
+    ],
+    [
+      -0.008310393110406666,
+      -0.5024095861989857,
+      0.8645898131840984,
+      -0.05833503567544633
+    ],
+    [
+      0.002881041345749531,
+      0.8646040517402502,
+      0.5024455525876482,
+      -0.034324754849976304
+    ],
+    [
+      0.0,
+      0.0,
+      0.0,
+      1.0
+    ]
+  ],
+  "T_raw_camera_head": [
+    [
+      -1.0,
+      -0.0,
+      -0.0,
+      0.055
+    ],
+    [
+      0.0,
+      -0.49999999999999994,
+      0.8660254037844387,
+      -0.058889727457341834
+    ],
+    [
+      0.0,
+      0.8660254037844387,
+      0.4999999999999999,
+      -0.033999999999999996
+    ],
+    [
+      0.0,
+      0.0,
+      0.0,
+      1.0
+    ]
+  ],
+  "rotation_quaternion_head_rectified_camera_xyzw": [
+    -0.0008239957431609653,
+    0.4987750442205295,
+    0.8667203205939665,
+    0.004319972605932179
+  ],
+  "camera_origin_in_head_m": [
+    0.055,
+    0.0,
+    0.068
+  ],
+  "pose_decoding_note": "Existing roll/pitch/yaw decoded as SciPy lowercase xyz extrinsic angles, degrees; not verified from acquisition code.",
+  "source_configuration": "outputs/l3_mount_candidate_A_calibration.json",
+  "excluded": "No previous wrist alignment offsets are part of this extrinsic.",
+  "pnp_axis_convention": "wrist_y_normal",
+  "pnp_axis_scope": "/home/baai/qmh/dataset/L3/L3_test_data/new"
+}

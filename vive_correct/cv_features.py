@@ -720,6 +720,8 @@ def _run_feature_dataset(args, dataset, output, config):
             for p in episodes
         ],
     )
+    if getattr(args, "ai_final_review", False):
+        plan["ai_final_review"] = True
     if getattr(args, "dry_run", False):
         print(json.dumps(plan, ensure_ascii=False, indent=2))
         return 0
@@ -784,18 +786,28 @@ def _run_feature_dataset(args, dataset, output, config):
 
     publish()
     last_summary = 0.0
-    with ProcessPoolExecutor(max_workers=min(args.jobs, max(1, len(pending)))) as pool:
+    from vive_correct.ai_final_review import FinalReviewQueue
+
+    with (
+        FinalReviewQueue(args, output, config) as ai_queue,
+        ProcessPoolExecutor(max_workers=min(args.jobs, max(1, len(pending)))) as pool,
+    ):
         futures = {
             pool.submit(
                 _scan_published, ep, folder, config, stride, args.max_frames, search, run_id
             ): ep
             for ep, folder in pending
         }
+        for ep in episodes:
+            if str(ep) in reports and not reports[str(ep)].get("error"):
+                ai_queue.submit(output / "features" / ep.relative_to(dataset))
         for future in as_completed(futures):
             ep = futures[future]
             try:
                 report = future.result()
                 reports[str(ep)] = report
+                if not report.get("error"):
+                    ai_queue.submit(output / "features" / ep.relative_to(dataset))
                 rows[str(ep)].update(
                     status="failed" if report.get("error") else "complete",
                     error=report.get("error"),

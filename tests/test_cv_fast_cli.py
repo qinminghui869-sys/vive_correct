@@ -60,6 +60,37 @@ class FastCLITests(unittest.TestCase):
                 self.assertEqual(main([*args, "--stage", "all"]), 0)
                 tracking.assert_called_once()
 
+    def test_ai_final_review_is_opt_in_and_dry_run_never_loads_model(self):
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            video = root / "dataset/scene/episode" / VIDEO_SUFFIX
+            video.parent.mkdir(parents=True)
+            video.touch()
+            args = [
+                "--profile",
+                "cv",
+                "--dataset",
+                str(root / "dataset"),
+                "--out",
+                str(root / "out"),
+            ]
+            for enabled in (False, True):
+                stream = io.StringIO()
+                with (
+                    redirect_stdout(stream),
+                    patch("vive_correct.ai_final_review.load_config") as model,
+                ):
+                    result = main([*args, "--dry-run", *(["--ai-final-review"] if enabled else [])])
+                self.assertEqual(result, 0)
+                model.assert_not_called()
+                self.assertEqual(
+                    json.loads(stream.getvalue()).get("ai_final_review", False), enabled
+                )
+                self.assertFalse((root / "out").exists())
+            with patch("vive_correct.cv_features.run_feature_dataset", return_value=0) as features:
+                self.assertEqual(main([*args, "--ai-final-review"]), 0)
+                self.assertTrue(features.call_args.args[0].ai_final_review)
+
     def test_shell_default_and_explicit_stage_override(self):
         script = Path(__file__).resolve().parents[1] / "scripts/run_cv.sh"
         with TemporaryDirectory() as directory:
