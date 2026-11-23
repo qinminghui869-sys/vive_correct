@@ -192,9 +192,14 @@ def estimate_dataset(dataset, output, config, jobs=1, episodes_file=None, detect
     return entries
 
 
+DEFAULT_PROFILE = "legacy"
+
+
 def main(argv=None):
     profile_parser = argparse.ArgumentParser(add_help=False)
-    profile_parser.add_argument("--profile", choices=("astra", "legacy", "cv"), default="astra")
+    profile_parser.add_argument(
+        "--profile", choices=("astra", "legacy", "cv"), default=DEFAULT_PROFILE
+    )
     profile_args, _ = profile_parser.parse_known_args(argv)
     parser = argparse.ArgumentParser(description=__doc__)
     try:
@@ -204,8 +209,8 @@ def main(argv=None):
     parser.add_argument(
         "--profile",
         choices=("astra", "legacy", "cv"),
-        default="astra",
-        help="cv: fast offline feature selection; astra (default): model review; legacy: API defaults",
+        default=DEFAULT_PROFILE,
+        help="legacy (default): API model from openai.local.json; astra: Codex GPT; cv: offline OpenCV",
     )
     parser.add_argument(
         "--dry-run",

@@ -96,13 +96,7 @@ def compose_review_image(rows):
             (20, 632, "ORIGINAL / CONTEXT"),
             (674, 286, "RAW CROP"),
             (982, 286, "CURRENT BOX + XYZ"),
-            (
-                1290,
-                286,
-                "PNP / Y-NORMAL"
-                if row.get("pnp_axis_convention") == "wrist_y_normal"
-                else "PNP / Z-NORMAL",
-            ),
+            (1290, 286, "PNP HINT"),
         ]
         for x, width, title in columns:
             _text(canvas, x, y + 56, title, 0.6)
@@ -112,14 +106,14 @@ def compose_review_image(rows):
                 _fit(canvas, picture[y0:y1, x0:x1], (x, y + 83, width, 330))
             else:
                 _text(canvas, x + 10, y + 230, "PnP unavailable", 0.7)
-                _text(canvas, x + 10, y + 260, "keep / unknown only", 0.6)
+                _text(canvas, x + 10, y + 260, "axes: keep or unknown", 0.6)
         if not row.get("current_axes_available", True):
             _text(canvas, 982, y + 430, "Current axes unavailable", 0.51)
         _text(
             canvas,
             674,
             y + 455,
-            f"Shared original crop: x=[{x0},{x1}), y=[{y0},{y1}). PnP is a geometric reference, not verified wrist axes.",
+            f"Shared original crop: x=[{x0},{x1}), y=[{y0},{y1}). Differing from PnP is not an axis error.",
             0.42,
         )
         metadata.append(

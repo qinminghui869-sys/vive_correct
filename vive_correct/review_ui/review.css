@@ -63,6 +63,30 @@ button.danger {
   border-color: #ca725e;
   background: #fff4f0;
 }
+.axis-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 4px 0 8px;
+}
+#axis-from-corners {
+  background: #1d6fbf;
+  color: white;
+  border-color: #1d6fbf;
+}
+#axis-from-corners:hover {
+  background: #185a9b;
+  border-color: #185a9b;
+}
+#axis-reset {
+  background: #8f5a0c;
+  color: white;
+  border-color: #8f5a0c;
+}
+#axis-reset:hover {
+  background: #734808;
+  border-color: #734808;
+}
 .review-decisions {
   display: inline-flex;
   align-items: center;

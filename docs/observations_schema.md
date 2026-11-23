@@ -1,6 +1,6 @@
 # 字段与接口
 
-本文定义坐标、人工审核记录和预览接口。操作步骤见 [审核指南](user_guide.md)，整段变换公式见 [校准模型](hand_pipeline.md#标签刚性绑定)。模型交付报告与人工审核依据包是不同 schema，不能仅凭同名 `observations.json` 混用。
+本文只定义坐标、审核记录和预览接口。操作见 [审核指南](user_guide.md)，整段变换见 [校准模型](hand_pipeline.md#标签刚性绑定)。模型交付报告和人工依据包同名 `observations.json`，schema 不同，不能混用。
 
 ## 坐标约定
 
@@ -27,7 +27,7 @@
 
 ## AI 建议记录
 
-`features/.../ai_review.json` 与人工记录独立；当前 `schema_version=1`、`prompt_version=2`：
+`features/.../ai_review.json` 与人工记录独立；当前 `schema_version=1`、`prompt_version=4`：
 
 - `status`：`running`、`complete` 或 `error`；加载时还可能返回 `stale` 或 `unavailable`。`complete` 仅表示复核结束。
 - `original`、`selected`：原选择和建议选择；`adjusted` 表示是否调整，`human_verified` 始终为 `false`。

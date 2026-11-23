@@ -160,8 +160,10 @@
                   <p class="control-help">直接修改角度参数；绕当前轴微调请使用上方按钮。</p>
                   <div id="axis-inputs"></div>
                 </details>
-                <button id="axis-from-corners" type="button">按四角校正方向</button>
-                <button id="axis-reset" type="button">恢复源方向</button>
+                <div class="axis-actions">
+                  <button id="axis-from-corners" type="button">按四角校正方向</button>
+                  <button id="axis-reset" type="button">恢复源方向</button>
+                </div>
                 <p>
                   四角校正采用当前挂载配置的 PnP 轴定义；wrist_y_normal 已包含局部 X −90°
                   转换，无需重复旋转。并非自动识别设备朝向。应用后可微调；修改四角后需再次点击。

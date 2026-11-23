@@ -86,8 +86,14 @@ class DepthMetadataTests(unittest.TestCase):
                 for value in (400, 255):
                     frame = MagicMock()
                     frame.to_ndarray.return_value = np.full((80, 100), value, np.uint16)
+                    packet = MagicMock()
+                    packet.pts = packet.dts = 0
+                    packet.is_keyframe = True
                     container = MagicMock()
-                    container.__enter__.return_value.decode.return_value = [frame]
+                    opened_container = container.__enter__.return_value
+                    opened_container.streams.video = [MagicMock()]
+                    opened_container.demux.return_value = [packet]
+                    opened_container.decode.return_value = [frame]
                     containers.append(container)
                 with patch("ego_data.depth_targets.av.open", side_effect=containers):
                     result = refine_targets(self.episode, report)[(0, "left")]

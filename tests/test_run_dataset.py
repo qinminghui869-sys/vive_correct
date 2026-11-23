@@ -87,7 +87,14 @@ class DatasetRunnerTests(unittest.TestCase):
                 patch("vive_correct.batch.automatic.run_automatic", return_value=0) as repair,
             ):
                 transport_class.return_value.return_value = '{"ok":true}'
-                argv = ["--dataset", str(dataset), "--out", str(root / "out")]
+                argv = [
+                    "--dataset",
+                    str(dataset),
+                    "--out",
+                    str(root / "out"),
+                    "--profile",
+                    "astra",
+                ]
                 self.assertEqual(main(argv), 0)
                 credentials.assert_not_called()
                 network.assert_not_called()
@@ -140,7 +147,7 @@ class DatasetRunnerTests(unittest.TestCase):
                 patch("vive_correct.run_dataset.estimate_dataset") as estimate,
             ):
                 for flags, guided in (
-                    ([], 6),
+                    ([], 0),
                     (["--fixed-candidates"], 0),
                     (["--model-review", "off"], 0),
                     (["--qwen-review", "off"], 0),
@@ -165,6 +172,8 @@ class DatasetRunnerTests(unittest.TestCase):
                             0,
                         )
                     plan = json.loads(captured.getvalue())
+                    self.assertEqual(plan["profile"], "legacy")
+                    self.assertEqual(plan["parameters"]["transport"], "api")
                     self.assertEqual(plan["parameters"]["review_batch_size"], 2)
                     self.assertEqual(plan["parameters"]["jobs"], 1)
                     self.assertEqual(plan["parameters"]["tracker_guided_frames"], guided)

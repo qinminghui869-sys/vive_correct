@@ -1,5 +1,6 @@
 # 统一运行入口的预设；显式 CLI 参数覆盖这里的值。
-# astra 使用 GPT-6Astra 与局部补扫；legacy 保留旧 API 运行方式。
+# 默认 profile 是 legacy：transport=api，模型名和密钥读取 vive_correct/openai.local.json。
+# astra 使用 GPT-6Astra 与局部补扫，需显式 --profile astra。
 # 自动补扫默认开启。关闭模型、基线回放或 fixed-candidates 时，不启用局部补扫。
 astra:
   transport: codex

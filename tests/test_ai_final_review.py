@@ -117,6 +117,34 @@ class FinalReviewTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "AI 建议"):
             self.store.save(0, payload)
 
+    def test_adjust_can_switch_to_a_listed_candidate_frame(self):
+        quad = [[1, 1], [4, 1], [4, 3], [1, 3]]
+        ask = Mock(
+            side_effect=[
+                {"left": dict(decision("adjust"), frame=8), "right": decision()},
+                {"left": decision(), "right": decision()},
+            ]
+        )
+        with patch.object(ai, "geometry", return_value=(pose(), None)):
+            selected, _, issues = ai.review_choices(
+                self.episode,
+                self.original,
+                self.mount,
+                self.cv,
+                ask,
+                {"left": {8: {"quad": quad, "candidate_id": "pool:1"}}},
+            )
+        self.assertEqual(selected["left"]["frame_index"], 8)
+        self.assertEqual(selected["left"]["quad"], quad)
+        self.assertNotIn("left", issues)
+        ask.side_effect = [{"left": dict(decision("adjust"), frame=9), "right": decision()}]
+        with patch.object(ai, "geometry", return_value=(pose(), None)):
+            selected, _, issues = ai.review_choices(
+                self.episode, self.original, self.mount, self.cv, ask, {"left": {}}
+            )
+        self.assertEqual(selected["left"]["frame_index"], self.original["left"]["frame_index"])
+        self.assertIn("候选帧", issues["left"])
+
     def test_box_change_uses_new_pnp_and_followup_never_redetects(self):
         revised = deepcopy(self.original["left"])
         revised["quad"][0][0] += 2
@@ -255,6 +283,22 @@ class FinalReviewTests(unittest.TestCase):
 
 
 class ResponseAndRotationTests(unittest.TestCase):
+    def test_prompt_judges_box_before_axes_and_allows_another_frame(self):
+        self.assertEqual(ai.VERSION, 4)
+        self.assertIn("先判框，再判轴", ai.PROMPT)
+        self.assertIn("必须以全景为准", ai.PROMPT)
+        self.assertIn("frame填元数据候选帧号", ai.PROMPT)
+        self.assertIn("框不是ok时，axis只能是unknown", ai.PROMPT)
+        self.assertIn("不要对调红蓝", ai.PROMPT)
+        self.assertIn("源轴与PnP方向不同不是错误", ai.PROMPT)
+        row = dict(side="left", **decision("adjust"), frame=12)
+        parsed = ai.validate_response({"decisions": [row]}, ["left"])
+        self.assertEqual(parsed["left"]["frame"], 12)
+        self.assertIsNone(parsed["left"]["region"])
+        for changes in ({"frame": 3, "region": [0, 0, 10, 10]}, {"box": "ok", "frame": 3}):
+            with self.assertRaises(ValueError):
+                ai.validate_response({"decisions": [dict(row, **changes)]}, ["left"])
+
     def test_schema_rejects_unbounded_or_arbitrary_operations(self):
         row = dict(side="left", **decision())
         for changes in (

@@ -76,6 +76,55 @@ def plane_center(depth_m, valid_mask, corners, intrinsics, ray):
     )
 
 
+def _packet_position(packet):
+    """Timestamp used only to relocate a keyframe. Flush packets are ignored."""
+    if type(getattr(packet, "pts", None)) is int:
+        return packet.pts
+    if type(getattr(packet, "dts", None)) is int:
+        return packet.dts
+    if packet.pts is None and packet.dts is None:
+        return None
+    return 0
+
+
+def _frame_after_keyframe(container, index):
+    """Decode the exact counted frame, starting at the preceding keyframe."""
+    stream = container.streams.video[0]
+    key_at, key_pts, count, found = 0, None, 0, False
+    for packet in container.demux(stream):
+        position = _packet_position(packet)
+        if position is None:
+            continue
+        if packet.is_keyframe and type(position) is int:
+            key_at, key_pts = count, position
+        if count == index:
+            found = True
+            break
+        count += 1
+    if not found or type(key_pts) is not int:
+        return None
+    container.seek(key_pts, stream=stream, backward=True, any_frame=False)
+    for number, frame in enumerate(container.decode(video=0)):
+        if number == index - key_at:
+            return frame.to_ndarray()
+    return None
+
+
+def _nth_decoded_frame(path, index):
+    """Return decoded frame ``index`` without scanning from the start of a long GOP."""
+    if type(index) is not int or index < 0:
+        raise ValueError("Depth frame unavailable")
+    with av.open(str(path)) as container:
+        frame = _frame_after_keyframe(container, index)
+    if frame is not None:
+        return frame
+    with av.open(str(path)) as container:
+        for number, decoded in enumerate(container.decode(video=0)):
+            if number == index:
+                return decoded.to_ndarray()
+    raise ValueError("Depth frame unavailable")
+
+
 def depth_frame(episode, annotation, index):
     """Reuse exact decoded depth/mask pixels across corner edits and approval."""
     from vive_correct.runtime_cache import CACHE, file_stamp
@@ -85,14 +134,10 @@ def depth_frame(episode, annotation, index):
     stamps = (file_stamp(video), file_stamp(mask_video))
 
     def read():
-        with av.open(str(video)) as dc, av.open(str(mask_video)) as mc:
-            # Count decoded frames as before: no FPS-based seeking or timestamp approximation.
-            for number, (df, mf) in enumerate(zip(dc.decode(video=0), mc.decode(video=0))):
-                if number == index:
-                    depth = df.to_ndarray().astype(float) / 1000
-                    mask = mf.to_ndarray()
-                    return depth, mask[:, :, 0] if mask.ndim == 3 else mask
-        raise ValueError("Depth frame unavailable")
+        # Frame numbers stay exact: packets are counted, then decoding starts at that keyframe.
+        depth = _nth_decoded_frame(video, index).astype(float) / 1000
+        mask = _nth_decoded_frame(mask_video, index)
+        return depth, mask[:, :, 0] if mask.ndim == 3 else mask
 
     result = CACHE.get(("depth_frame", stamps, index), read)
     if stamps != (file_stamp(video), file_stamp(mask_video)):

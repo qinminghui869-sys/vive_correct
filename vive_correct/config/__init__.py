@@ -97,7 +97,7 @@ _RUN_TYPES = {
 }
 
 
-def run_settings(profile="astra"):
+def run_settings(profile="legacy"):
     """Load a complete preset; reject misspelled or invalid tuning parameters."""
     document = yaml.safe_load((_DIR / "run.yaml").read_text(encoding="utf-8"))
     if not isinstance(document, dict) or set(document) != {"astra", "legacy", "cv"}:

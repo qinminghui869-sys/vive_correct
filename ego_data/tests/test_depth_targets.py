@@ -2,8 +2,9 @@ import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest.mock import MagicMock, patch
+import av
 import numpy as np
-from ego_data.depth_targets import DEPTH_KEY, depth_frame, plane_center
+from ego_data.depth_targets import DEPTH_KEY, _nth_decoded_frame, depth_frame, plane_center
 from vive_correct.runtime_cache import CACHE
 
 
@@ -24,13 +25,22 @@ class DepthTargetTests(unittest.TestCase):
             def open_video(path):
                 container = MagicMock()
                 frames = []
-                for value in (100, 400):
+                packets = []
+                for number, value in enumerate((100, 400)):
                     frame = MagicMock()
                     frame.to_ndarray.return_value = np.full(
                         (8, 10), 255 if path == str(mask) else value, np.uint16
                     )
                     frames.append(frame)
-                container.__enter__.return_value.decode.return_value = frames
+                    packet = MagicMock()
+                    packet.pts = number
+                    packet.dts = number
+                    packet.is_keyframe = number == 0
+                    packets.append(packet)
+                opened_container = container.__enter__.return_value
+                opened_container.streams.video = [MagicMock()]
+                opened_container.demux.return_value = packets
+                opened_container.decode.return_value = frames
                 return container
 
             with patch("ego_data.depth_targets.av.open", side_effect=open_video) as opened:
@@ -46,6 +56,32 @@ class DepthTargetTests(unittest.TestCase):
                 self.assertEqual(opened.call_count, 6)
                 with self.assertRaisesRegex(ValueError, "unavailable"):
                     depth_frame(episode, ann, 2)
+
+    def test_keyframe_seek_matches_counted_decode(self):
+        with TemporaryDirectory() as directory:
+            path = Path(directory) / "clip.mp4"
+            with av.open(str(path), "w") as container:
+                stream = container.add_stream("mpeg4", rate=30)
+                stream.width = stream.height = 16
+                stream.pix_fmt = "yuv420p"
+                stream.codec_context.gop_size = 8
+                for i in range(24):
+                    image = np.full((16, 16, 3), i * 8, np.uint8)
+                    frame = av.VideoFrame.from_ndarray(image, format="rgb24")
+                    for packet in stream.encode(frame):
+                        container.mux(packet)
+                for packet in stream.encode():
+                    container.mux(packet)
+            for index in (0, 1, 7, 8, 15, 23):
+                with av.open(str(path)) as container:
+                    expected = next(
+                        frame.to_ndarray()
+                        for number, frame in enumerate(container.decode(video=0))
+                        if number == index
+                    )
+                np.testing.assert_array_equal(_nth_decoded_frame(path, index), expected)
+            with self.assertRaisesRegex(ValueError, "unavailable"):
+                _nth_decoded_frame(path, 24)
 
     def test_refines_wrong_scale_without_changing_image_ray(self):
         depth = np.full((80, 100), 0.4)

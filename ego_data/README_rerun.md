@@ -8,7 +8,7 @@ python3 -m vive_correct view outputs/cv
 python3 -m vive_correct view /path/to/recording.rrd
 ```
 
-此命令只打开已有录制，不重新识别或导出。目录入口读取 `rerun/manifest.json`；审核录制实际位于 `repairs/<运行>/rerun/`。青色表示左手，粉色表示右手，灰色为修正前骨架。录制生成步骤见 [审核指南](../docs/review_rebuild.md#导出与查看)。
+`view` 只打开已有录制。目录入口读 `rerun/manifest.json`；审核录制在 `repairs/<运行>/rerun/`。青色是左手，粉色是右手，灰色是修正前骨架。生成步骤见 [导出与查看](../docs/review_rebuild.md#导出与查看)。
 
 ## 完整 RRD 的输入
 

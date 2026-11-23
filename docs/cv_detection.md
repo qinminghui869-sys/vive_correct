@@ -1,6 +1,6 @@
 # OpenCV 选帧与检测
 
-默认用 OpenCV 快速选择标签参考帧，不调用模型、不运行整段身份跟踪。结果是候选材料，物理左右手与几何仍需人工确认。输入文件见 [运行指南](../vive_correct/README.md#输入要求)，后续操作见 [审核与重建](review_rebuild.md)。
+OpenCV 只选择标签参考帧，不调用模型，也不做整段身份跟踪。结果仍须人工确认物理左右手和几何。输入见 [运行指南](../vive_correct/README.md#输入要求)，审核之后见 [导出与重建](review_rebuild.md)。
 
 ## 选择样本与扫描模式
 
@@ -61,8 +61,7 @@ feature_fast_timeout_s: 30.0
 
 ## 可选：AI 检查最终框与 XYZ
 
-`--ai-final-review` 在选帧后异步检查最终框与轴，默认关闭，结果仍需人工审核。
-拼接图输入、Codex/API 配置及批次轴定义见 [AI 预审](ai_review.md)。
+`--ai-final-review` 在选帧后异步检查最终框和轴，默认关闭。配置、拼接图和批次轴定义见 [AI 预审](ai_review.md)。
 
 ## 检测与可选跟踪
 
