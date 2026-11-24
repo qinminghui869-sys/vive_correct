@@ -127,6 +127,7 @@ def rebuild(output, calibration=DEFAULT_MOUNT, *, in_place=False, episode=None):
                                 prepared["files"],
                                 bundle["baseline_hashes"],
                                 bundle["directory"],
+                                store.output,
                             )
                         )
                     row["in_place"] = in_place
@@ -149,7 +150,9 @@ def main(argv=None):
     parser.add_argument("--initial-mount", type=Path, default=DEFAULT_MOUNT)
     parser.add_argument("--episode", type=Path)
     parser.add_argument(
-        "--in-place", action="store_true", help="备份为 .parquet.bak 后覆盖六个源文件"
+        "--in-place",
+        action="store_true",
+        help="直接覆盖六个源文件，并刷新 episodes_stats.jsonl 与 readme.json 的 size_bytes",
     )
     args = parser.parse_args(argv)
     try:

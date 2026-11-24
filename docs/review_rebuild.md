@@ -25,7 +25,7 @@ python3 -m vive_correct view outputs/ks3
 
 <a id="rebuild-and-backup"></a>
 
-## 重建与备份
+## 原地重建
 
 ```bash
 python3 -m vive_correct rebuild --out outputs/ks3
@@ -37,7 +37,7 @@ python3 -m vive_correct rebuild --out outputs/ks3
 python3 -m vive_correct rebuild --out outputs/ks3 --in-place
 ```
 
-覆盖前会备份原文件。单条加 `--episode /path/to/episode`。`review`、`repair`、`rebuild` 若用了自定义外参，必须传同一个 `--initial-mount FILE`。
+单条加 `--episode /path/to/episode`。`review`、`repair`、`rebuild` 若用了自定义外参，必须传同一个 `--initial-mount FILE`。
 
 每条数据只改该条数据目录下的六个文件。单条旧数据在 `data/chunk-000/episode_000000/`；多条数据集在 `data/chunk-000/episode_NNNNNN/`：
 
@@ -47,13 +47,20 @@ python3 -m vive_correct rebuild --out outputs/ks3 --in-place
 
 保留行数、时间戳、字段类型、Arrow 元数据和非目标字段。缺测或同步失败的坐标组保持原值，并记录跳过数量。不修改 `observation.hand_skeleton.parquet`。
 
-`--in-place` 先生成并校验全部六个文件，再备份、登记、替换。首次 `.parquet.bak` 不覆盖；再次重建仍以原始文件为基线。失败会回滚。中断后按 `<episode>/.vive_rebuild/` 的事务记录恢复。不要删备份或事务记录来绕过冲突检查。
+`--in-place` 校验通过后直接替换这六个源文件，并在同一事务里更新 [数据集元数据](#dataset-metadata)。源目录不写 `.parquet.bak` 或 `.vive_rebuild/`。
+
+原始文件留在首次执行的 `<out>/rebuild_state/<样本>/baseline/`，并由 `outputs/rebuild_index.json` 登记。再次重建仍用这份基线。失败或中断会恢复六个源文件和已改的元数据。不要删除 `rebuild_state/` 或索引来绕过校验。
 
 <a id="dataset-metadata"></a>
 
 ### 数据集元数据
 
-当前不更新 `meta/`。训练交付前，按原数据集口径重算 `episodes_stats.jsonl` 里已改维度的统计，否则可能影响归一化。`readme.json` 若记录大小或数量，也要刷新。字段、行数和时间戳不变时，不必改 `info.json`、`episodes.jsonl` 或对齐记录。相机标定保留，腕部修正由依据包追溯。`meta/` 不在当前备份和回滚范围内。
+`--in-place` 成功后，在同一次事务里更新数据集 `meta/`。失败或中断会把这两份文件和六个 Parquet 一起恢复。
+
+- `episodes_stats.jsonl`：重算该条的 `observation.left_wrist_pose`、`observation.right_wrist_pose`、`action`、`observation.state`、`observation.hand_left_points`、`observation.hand_right_points`。每项重算 `min`、`max`、`mean`、`std` 和 `count`。计算方式沿用这一项原来的数值，未改动的列保持原统计。其他特征不变。
+- `readme.json`：`size_bytes` 加上这六个文件的大小变化。`file_count`、`frame_count` 和其他字段不变。
+
+文件不存在时跳过。不改 `info.json`、`episodes.jsonl`、`tasks.jsonl`、`calibrations.jsonl`、`collect_info.jsonl`、`qc_reports.jsonl`。`hand_pose`、`hand_skeleton` 以及头、眼、肌电、脑电的统计不变。
 
 <a id="concurrency"></a>
 

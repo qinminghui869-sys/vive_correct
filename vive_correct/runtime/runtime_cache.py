@@ -22,7 +22,7 @@ def source_stamp(episode):
     episode = Path(episode)
     return tuple(
         file_stamp(p)
-        for folder in ("data", "videos", "calibrations", "annotation", ".vive_rebuild")
+        for folder in ("data", "videos", "calibrations", "annotation")
         for p in sorted((episode / folder).rglob("*"))
         if p.is_file() and not p.name.endswith((".lock", ".restore"))
     )

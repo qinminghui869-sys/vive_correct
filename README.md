@@ -18,11 +18,11 @@ python3 -m pip install -r requirements.txt
 
 ## 快速开始
 
-以下命令均在仓库根目录执行。将 `DATASET` 替换为实际数据路径；所有阶段使用相同的输出目录。
+以下命令均在仓库根目录执行。`DATASET` 换成实际数据路径，各阶段使用同一个 `OUT`。不写 `--out` 时，过程文件默认进入 `outputs/ks3`。
 
 ```bash
 DATASET="/path/to/dataset"
-OUT="outputs/review"
+OUT="outputs/ks3"
 bash scripts/run_cv.sh "$DATASET" "$OUT"
 ```
 
@@ -37,26 +37,26 @@ bash scripts/run_cv.sh "$DATASET" "$OUT" --ai-final-review
 另开终端启动审核，可与选帧同时进行：
 
 ```bash
-python3 -m vive_correct review --out outputs/review --port 18775
+python3 -m vive_correct review --out "$OUT" --port 18775
 ```
 
-打开 [审核页面](http://127.0.0.1:18775)。核对物理左右手、四角和红 X / 绿 Y / 蓝 Z，填写审核人后提交。**通过**进入后续处理，**不通过**排除整条，**暂存**保留草稿。页面操作见 [审核指南](docs/user_guide.md)。启用 AI 预审见 [AI 预审](docs/ai_review.md)。
+打开 [审核页面](http://127.0.0.1:18775)。核对物理左右手、四角和红 X / 绿 Y / 蓝 Z，填写审核人后提交。**通过**进入后续处理，**不通过**排除整条，**暂存**保留草稿。页面操作见 [审核指南](docs/user_guide.md)。
 
 只处理已通过且依据仍有效的数据：
 
 ```bash
-python3 -m vive_correct repair --out outputs/review --export-jobs 1
-python3 -m vive_correct view outputs/review
-python3 -m vive_correct rebuild --out outputs/review
+python3 -m vive_correct repair --out "$OUT" --export-jobs 1
+python3 -m vive_correct view "$OUT"
+python3 -m vive_correct rebuild --out "$OUT"
 ```
 
-`repair` 导出 RRD，`rebuild` 另存修正 Parquet，两者都不改源文件。覆盖源数据必须显式使用 `rebuild --in-place`，范围和备份见 [重建与备份](docs/review_rebuild.md#rebuild-and-backup)。
+`repair` 导出 RRD，`rebuild` 另存修正 Parquet，两者都不改源文件。覆盖源数据必须显式使用 `rebuild --in-place`，范围见 [原地重建](docs/review_rebuild.md#rebuild-and-backup)。
 
 ## 使用边界
 
 - 修正原点是 **50 × 30 mm 标签中心**，且标签与腕部刚性绑定。它不是已标定的 Vive 内部原点。
 - 画面左右不是物理左右手。AI 建议和 PnP 重投影通过都不能代替人工确认。
-- 默认相机外参是安装近似。只有 `rebuild --in-place` 修改源文件。`hand_skeleton` 和 `meta/` 不自动更新。
+- 默认相机外参是安装近似。只有 `rebuild --in-place` 修改源文件，范围见 [原地重建](docs/review_rebuild.md#rebuild-and-backup)。
 
 ## 文档
 

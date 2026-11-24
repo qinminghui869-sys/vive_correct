@@ -1,5 +1,6 @@
 """Six-file reconstruction, immutable baselines and split review/export contracts."""
 
+import json
 import os
 import unittest
 from pathlib import Path
@@ -18,7 +19,15 @@ from vive_correct.review.parquet_correction import position_groups, verify_table
 from vive_correct.review.review_actions import export_approved, rebuild
 from vive_correct.review.review_bundle import approve, review_state, stage_files
 from vive_correct.review.review_io import atomic_json, read_json
-from vive_correct.data.source_data import DATA, FILES, apply_files, original_files, recover
+from vive_correct.data.source_data import (
+    DATA,
+    FILES,
+    apply_files,
+    episode_key,
+    original_files,
+    rebuild_journal,
+    recover,
+)
 
 
 class RebuildTests(unittest.TestCase):
@@ -28,6 +37,8 @@ class RebuildTests(unittest.TestCase):
         self.root = Path(self.temp.name)
         self.episode, self.output, self.mount = make_fixture(self.root)
         self.store = ReviewStore(self.output)
+        os.environ["VIVE_REBUILD_INDEX"] = str(self.root / "rebuild_index.json")
+        self.addCleanup(lambda: os.environ.pop("VIVE_REBUILD_INDEX", None))
 
     def approve(self, store=None, index=0):
         store = store or self.store
@@ -181,6 +192,8 @@ class RebuildTests(unittest.TestCase):
         self.assertEqual(source_signature(self.episode), signature)
         self.assertTrue(review_state(self.store, 0, self.mount)["approved"])
         self.assertEqual({n: digest(p) for n, p in original_files(self.episode).items()}, before)
+        self.assertFalse((self.episode / ".vive_rebuild").exists())
+        self.assertFalse(any((self.episode / DATA).glob("*.bak")))
         self.assertEqual(rebuild(self.output, self.mount, in_place=True)["status"], "complete")
         self.assertEqual(self.hashes(), first_hashes)
         state = self.store.load(0)
@@ -200,15 +213,21 @@ class RebuildTests(unittest.TestCase):
         backup.write_bytes(b"unregistered")
         with self.assertRaisesRegex(ValueError, "未登记"):
             apply_files(
-                self.episode, staged["files"], bundle["baseline_hashes"], bundle["directory"]
+                self.episode,
+                staged["files"],
+                bundle["baseline_hashes"],
+                bundle["directory"],
+                self.output,
             )
         self.assertEqual(backup.read_bytes(), b"unregistered")
         backup.unlink()
         self.assertEqual(rebuild(self.output, self.mount, in_place=True)["status"], "complete")
-        original_bytes = backup.read_bytes()
-        backup.write_bytes(b"damaged")
+        self.assertFalse(backup.exists())
+        baseline = rebuild_journal(self.episode) / "baseline" / FILES[0]
+        original_bytes = baseline.read_bytes()
+        baseline.write_bytes(b"damaged")
         self.assertFalse(review_state(self.store, 0, self.mount)["approved"])
-        backup.write_bytes(original_bytes)
+        baseline.write_bytes(original_bytes)
         target.write_bytes(b"external edit")
         result = rebuild(self.output, self.mount, in_place=True)
         self.assertEqual(result["status"], "incomplete")
@@ -219,7 +238,13 @@ class RebuildTests(unittest.TestCase):
         bundle = self.approve()
         staged = stage_files(bundle)
         before = self.hashes()
-        foreign = self.episode / DATA / (FILES[2] + ".bak")
+        foreign = (
+            self.output.resolve()
+            / "rebuild_state"
+            / episode_key(self.episode)
+            / "baseline"
+            / FILES[2]
+        )
         real_link = os.link
 
         def race(source, destination):
@@ -230,10 +255,15 @@ class RebuildTests(unittest.TestCase):
         with patch("vive_correct.data.source_data.os.link", side_effect=race):
             with self.assertRaises(FileExistsError):
                 apply_files(
-                    self.episode, staged["files"], bundle["baseline_hashes"], bundle["directory"]
+                    self.episode,
+                    staged["files"],
+                    bundle["baseline_hashes"],
+                    bundle["directory"],
+                    self.output,
                 )
         self.assertEqual(before, self.hashes())
         self.assertEqual(foreign.read_bytes(), b"external backup")
+        self.assertFalse((self.episode / ".vive_rebuild").exists())
 
     def test_render_read_guard_blocks_in_place_replacement(self):
         from vive_correct.data.source_data import baseline_read
@@ -244,7 +274,11 @@ class RebuildTests(unittest.TestCase):
         with baseline_read(self.episode):
             with self.assertRaisesRegex(ValueError, "正在读取"):
                 apply_files(
-                    self.episode, staged["files"], bundle["baseline_hashes"], bundle["directory"]
+                    self.episode,
+                    staged["files"],
+                    bundle["baseline_hashes"],
+                    bundle["directory"],
+                    self.output,
                 )
         self.assertEqual(before, self.hashes())
 
@@ -262,12 +296,17 @@ class RebuildTests(unittest.TestCase):
         with patch("vive_correct.data.source_data.os.replace", side_effect=fail):
             with self.assertRaisesRegex(OSError, "simulated"):
                 apply_files(
-                    self.episode, staged["files"], bundle["baseline_hashes"], bundle["directory"]
+                    self.episode,
+                    staged["files"],
+                    bundle["baseline_hashes"],
+                    bundle["directory"],
+                    self.output,
                 )
         self.assertEqual(before, self.hashes())
         self.assertFalse(any((self.episode / DATA / (n + ".bak")).exists() for n in FILES))
+        self.assertFalse((self.episode / ".vive_rebuild").exists())
         self.assertEqual(
-            read_json(self.episode / ".vive_rebuild/transaction.json")["status"], "rolled_back"
+            read_json(rebuild_journal(self.episode) / "transaction.json")["status"], "rolled_back"
         )
 
     def test_process_interruption_restores_previous_success_not_initial_baseline(self):
@@ -294,10 +333,14 @@ class RebuildTests(unittest.TestCase):
         with patch("vive_correct.data.source_data.os.replace", side_effect=crash):
             with self.assertRaises(Crash):
                 apply_files(
-                    self.episode, staged["files"], bundle["baseline_hashes"], bundle["directory"]
+                    self.episode,
+                    staged["files"],
+                    bundle["baseline_hashes"],
+                    bundle["directory"],
+                    self.output,
                 )
         self.assertEqual(
-            read_json(self.episode / ".vive_rebuild/transaction.json")["status"], "applying"
+            read_json(rebuild_journal(self.episode) / "transaction.json")["status"], "applying"
         )
         recover(self.episode)
         self.assertEqual(self.hashes(), before)
@@ -357,6 +400,102 @@ class RebuildTests(unittest.TestCase):
             cached = export_approved(self.store, 0, self.mount)
             self.assertTrue(cached["reused"])
             render.assert_not_called()
+
+    def _write_meta(self):
+        meta = self.episode / "meta"
+        meta.mkdir()
+        stats = {
+            "episode_index": 0,
+            "stats": {
+                "observation.head_pose": {
+                    "min": [1.0],
+                    "max": [2.0],
+                    "mean": [1.5],
+                    "std": [0.5],
+                    "count": [4],
+                }
+            },
+        }
+        for name in FILES:
+            table = pq.read_table(self.episode / DATA / name)
+            columns = [
+                column
+                for column in table.column_names
+                if column not in ("timestamp", "episode_index", "frame_index", "index")
+                and pa.types.is_floating(table.schema.field(column).type)
+            ]
+            values = np.column_stack([table[column].to_numpy() for column in columns])
+            stats["stats"][name.removesuffix(".parquet")] = {
+                "min": [float(value) for value in np.min(values, axis=0)],
+                "max": [float(value) for value in np.max(values, axis=0)],
+                "mean": [float(value) for value in np.mean(values, axis=0)],
+                "std": [float(value) for value in np.std(values, axis=0)],
+                "count": [len(values)],
+            }
+        stats_text = json.dumps(stats, ensure_ascii=False) + "\n"
+        readme = {"dataset_name": "fixture", "size_bytes": 1000, "file_count": 7, "frame_count": 4}
+        readme_text = json.dumps(readme, ensure_ascii=False, indent=2) + "\n"
+        (meta / "episodes_stats.jsonl").write_text(stats_text)
+        (meta / "readme.json").write_text(readme_text)
+        return stats_text, readme_text
+
+    def test_plain_rebuild_leaves_metadata_and_in_place_refreshes_it(self):
+        self.approve()
+        stats_text, readme_text = self._write_meta()
+        meta = self.episode / "meta"
+        sizes = {name: (self.episode / DATA / name).stat().st_size for name in FILES}
+        self.assertEqual(rebuild(self.output, self.mount)["status"], "complete")
+        self.assertEqual((meta / "episodes_stats.jsonl").read_text(), stats_text)
+        self.assertEqual((meta / "readme.json").read_text(), readme_text)
+        result = rebuild(self.output, self.mount, in_place=True)
+        self.assertEqual(result["status"], "complete", result)
+        updated = json.loads((meta / "episodes_stats.jsonl").read_text())
+        original = json.loads(stats_text)
+        self.assertEqual(updated["stats"]["observation.head_pose"], original["stats"]["observation.head_pose"])
+        self.assertEqual(updated["stats"]["action"]["mean"][0], original["stats"]["action"]["mean"][0])
+        self.assertNotEqual(
+            updated["stats"]["observation.left_wrist_pose"]["mean"],
+            original["stats"]["observation.left_wrist_pose"]["mean"],
+        )
+        self.assertEqual(
+            updated["stats"]["observation.left_wrist_pose"]["count"],
+            original["stats"]["observation.left_wrist_pose"]["count"],
+        )
+        delta = sum((self.episode / DATA / name).stat().st_size - sizes[name] for name in FILES)
+        readme = json.loads((meta / "readme.json").read_text())
+        self.assertEqual(readme["size_bytes"], 1000 + delta)
+        self.assertEqual(readme["file_count"], 7)
+        self.assertEqual(readme["frame_count"], 4)
+        self.assertFalse((self.episode / ".vive_rebuild").exists())
+        self.assertFalse(any((self.episode / DATA).glob("*.bak")))
+        self.assertFalse(any(meta.glob(".*.tmp")))
+
+    def test_metadata_failure_rolls_back_stats_and_sources(self):
+        from vive_correct.review.dataset_meta import refresh_dataset_meta
+
+        bundle = self.approve()
+        staged = stage_files(bundle)
+        stats_text, readme_text = self._write_meta()
+        before = self.hashes()
+
+        def fail_after_write(*args, **kwargs):
+            refresh_dataset_meta(*args, **kwargs)
+            raise OSError("meta failed")
+
+        with patch(
+            "vive_correct.review.dataset_meta.refresh_dataset_meta", side_effect=fail_after_write
+        ):
+            with self.assertRaisesRegex(OSError, "meta failed"):
+                apply_files(
+                    self.episode,
+                    staged["files"],
+                    bundle["baseline_hashes"],
+                    bundle["directory"],
+                    self.output,
+                )
+        self.assertEqual(self.hashes(), before)
+        self.assertEqual((self.episode / "meta" / "episodes_stats.jsonl").read_text(), stats_text)
+        self.assertEqual((self.episode / "meta" / "readme.json").read_text(), readme_text)
 
     def test_one_failed_episode_does_not_block_another_and_selector_is_exact(self):
         _, output, _ = make_fixture(self.root / "other")
