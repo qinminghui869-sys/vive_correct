@@ -24,7 +24,7 @@ AI 需要有效的本地模型配置和网络；配置见 [AI 预审](ai_review.
 - 打开审核页，确认条目可读取、特征图可显示。人工检查左右手、四角与 XYZ 后，才能验证通过审核、RRD 导出和 Parquet 重建。
 - 留存命令、代码版本、日志和输出目录。仅有候选而没有人工真值时，不报告准确率。
 
-逐条标定位于 `calibrations/chunk-000/episode_NNNNNN/rectify_params.yaml`；解析规则见 [输入要求](../vive_correct/README.md#输入要求)。
+逐条标定位于 `calibrations/chunk-000/episode_NNNNNN/rectify_params.yaml`；解析规则见 [输入要求](../vive_correct/README.md#inputs)。
 
 ## 最近验证：2026-11-24
 

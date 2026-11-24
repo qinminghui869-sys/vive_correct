@@ -1,6 +1,6 @@
 # OpenCV 选帧与检测
 
-OpenCV 只选择标签参考帧，不调用模型，也不做整段身份跟踪。结果仍须人工确认物理左右手和几何。输入见 [运行指南](../vive_correct/README.md#输入要求)，审核之后见 [导出与重建](review_rebuild.md)。
+OpenCV 只选择标签参考帧，不调用模型，也不做整段身份跟踪。结果仍须人工确认物理左右手和几何。输入见 [运行指南](../vive_correct/README.md#inputs)，审核之后见 [导出与重建](review_rebuild.md)。
 
 ## 选择样本与扫描模式
 
@@ -21,7 +21,10 @@ bash scripts/run_cv.sh /path/to/dataset outputs/cv_tracked \
 清单必须是非空 JSON 数组，路径相对本次数据集根目录填写。单条旧数据写样本目录；KS3 写该条的数据目录，例如：
 
 ```json
-["desk/episode-a", "dining-task/data/chunk-000/episode_000003"]
+[
+  "desk/episode-a",
+  "dining-task/data/chunk-000/episode_000003"
+]
 ```
 
 省略 `--episodes-file` 处理全部样本；加 `--dry-run` 只预览计划。`--max-frames 120` 将视频限制为前 120 帧，仅适合短片冒烟测试，区别于快速模式在全时段内最多检测 120 帧。
@@ -57,7 +60,7 @@ feature_fast_timeout_s: 30.0
 
 停止原因包括 `bilateral_candidates`、`sample_budget`、`time_budget`、`scan_complete` 和 `error`。单条发布后即可在浏览器审核，无需等整批结束。退出码 0 不代表双侧检出正确或已通过审核。
 
-未跟踪候选标记 `image_half_unverified`，只作画面半区提示。双手可能来自不同帧，不能作为同时刻相对位姿；四角坐标约定见 [字段与接口](observations_schema.md#坐标约定)。
+未跟踪候选标记 `image_half_unverified`，只作画面半区提示。双手可能来自不同帧，不能作为同时刻相对位姿；四角坐标约定见 [字段与接口](observations_schema.md#coordinates)。
 
 ## 可选：AI 检查最终框与 XYZ
 
@@ -70,6 +73,8 @@ feature_fast_timeout_s: 30.0
 重复白块只在同一黑色外壳的凸包内计数，避免把背景桌布误当键盘。外壳与手套相连、边界超出搜索区域时，若标签与黑色包围检查仍通过，可保留为 `review_candidate`，并提示 `body_extent_unresolved`；此类候选不触发双侧提前结束，需人工核对设备身份与四角。
 
 显式启用跟踪时，首个可靠双手窗口假设双手未交叉且相机未镜像；初始化需连续 `tracking_window` 帧可靠关联。之后逐帧几何验收，短缺失最多用 3 帧光流桥接，桥接帧不作观测；身份不确定时输出缺失，不按半区重新命名。
+
+<a id="detection-troubleshooting"></a>
 
 ## 漏检排查
 

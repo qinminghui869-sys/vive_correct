@@ -8,7 +8,9 @@ python3 -m vive_correct view outputs/cv
 python3 -m vive_correct view /path/to/recording.rrd
 ```
 
-`view` 只打开已有录制。目录入口读 `rerun/manifest.json`；审核录制在 `repairs/<运行>/rerun/`。青色是左手，粉色是右手，灰色是修正前骨架。生成步骤见 [导出与查看](../docs/review_rebuild.md#导出与查看)。
+`view` 只打开已有录制。目录入口读 `rerun/manifest.json`；审核录制在 `repairs/<运行>/rerun/`。青色是左手，粉色是右手，灰色是修正前骨架。生成步骤见 [导出与查看](../docs/review_rebuild.md#export-and-view)。
+
+<a id="rrd-inputs"></a>
 
 ## 完整 RRD 的输入
 
@@ -20,6 +22,8 @@ python3 -m vive_correct view /path/to/recording.rrd
 - `eye_gaze`、`eye_rgb` 视频及其时间戳，供当前渲染器的眼动视图读取。
 
 世界对齐还依赖 [相机到头部外参](../calibrations/README.md) 和头部欧拉角约定。缺外参的独立查看模式不能视为点云与跟踪数据已对齐。审核导出在深度输入不足时回退到 RGB；选中的深度元数据损坏时不静默切换文件。
+
+<a id="depth-metadata"></a>
 
 ### 深度元数据
 
@@ -59,11 +63,11 @@ python3 -m vive_correct raw \
 
 省略 `--repair-hands` 直接读取已有 21 关节；`--rgb-only` 仅查看 RGB 与原始 MANUS。缺深度自动回退，侧别不确定时标记 `unverified_source_preview`。
 
-输出为 `raw.rrd`、`repaired.rrd` 或 `unverified.rrd` 及同名 JSON。21 关节编号：腕 0，拇指 1–4，食指 5–8，中指 9–12，无名指 13–16，小指 17–20。局部骨架转换与安装假设见 [手部流程](../docs/hand_pipeline.md#独立-manus-重建)。
+输出为 `raw.rrd`、`repaired.rrd` 或 `unverified.rrd` 及同名 JSON。21 关节编号：腕 0，拇指 1–4，食指 5–8，中指 9–12，无名指 13–16，小指 17–20。局部骨架转换与安装假设见 [手部流程](../docs/hand_pipeline.md#manus-reconstruction)。
 
 ## 同步与独立工具
 
-跟踪时间戳稳定排序，非有限值丢弃，冲突作为缺测屏障。原始最近邻查看容差为 5 ms；启用跟踪插值时位置线性插值、旋转取最短弧，区间不超过 50 ms，不外推。诊断写入录制 JSON 的 `timestamp_diagnostics`；审核深度精修规则见 [校准模型](../docs/hand_pipeline.md#同步与字段保真)。
+跟踪时间戳稳定排序，非有限值丢弃，冲突作为缺测屏障。原始最近邻查看容差为 5 ms；启用跟踪插值时位置线性插值、旋转取最短弧，区间不超过 50 ms，不外推。诊断写入录制 JSON 的 `timestamp_diagnostics`；审核深度精修规则见 [校准模型](../docs/hand_pipeline.md#synchronization)。
 
 `python3 open_file.py /path/to/episode` 打开手动调腕部工具，需要完整深度和系统 Tk。它使用固定世界偏移，区别于浏览器的腕部本地刚性校准。
 

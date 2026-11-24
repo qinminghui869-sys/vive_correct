@@ -2,6 +2,8 @@
 
 浏览器审核修正的是已有世界坐标手点。独立 MANUS 工具从局部骨架重建手点。两条路径不能叠用。
 
+<a id="rigid-calibration"></a>
+
 ## 标签刚性绑定
 
 ```mermaid
@@ -26,7 +28,9 @@ q′(t) = p′(t) + R(t)C R(t)ᵀ(q(t) − p(t))
 
 `d` 是固定本地平移，`C` 是本地内禀 XYZ 旋转，`q` 是原世界手点。偏移随腕部转动，刚性变换保持手型和关节间距离。假定标签与设备之间不滑动；单帧残差为零不能证明整段实测精度。
 
-默认 `C` 为单位矩阵。手动输入与“四角校正”均保存为同一角度字段；四角校正取同一个 PnP 标签平面，以 `C = R_source_cameraᵀ R_corner_camera` 换算，不改变中心。操作约定见 [方向调整](user_guide.md#调整图像与方向)。
+默认 `C` 为单位矩阵。手动输入与“四角校正”均保存为同一角度字段；四角校正取同一个 PnP 标签平面，以 `C = R_source_cameraᵀ R_corner_camera` 换算，不改变中心。操作约定见 [方向调整](user_guide.md#adjustments)。
+
+<a id="synchronization"></a>
 
 ### 同步与字段保真
 
@@ -39,9 +43,11 @@ q′(t) = p′(t) + R(t)C R(t)ᵀ(q(t) − p(t))
 
 深度精修要求 RGB 与深度时间差不超过 5 ms；有效点、覆盖率或平面残差检查失败时保留 PnP，记录 `unverified_pnp_preview`。骨架与点云仅在同一坐标系叠加，不将关节吸附到最近点云。
 
+<a id="manus-reconstruction"></a>
+
 ## 独立 MANUS 重建
 
-原始查看工具可从 `observation.hand_skeleton.parquet` 的 50 个局部节点重建手点，并用屈指信号核查左右分组。这不是浏览器审核的必经步骤；另行修改源骨架时需同步 [数据集元数据](review_rebuild.md#数据集元数据)。
+原始查看工具可从 `observation.hand_skeleton.parquet` 的 50 个局部节点重建手点，并用屈指信号核查左右分组。这不是浏览器审核的必经步骤；另行修改源骨架时需同步 [数据集元数据](review_rebuild.md#dataset-metadata)。
 
 - 每手取局部索引 `0,1,2,3,4,6,7,8,9,11,12,13,14,16,17,18,19,21,22,23,24`，输出 MANUS 21 关节，不是 MANO。
 - 当前安装假设：`p_tracker = p_manus[y,z,x] + [0,−0.085,−0.058]`，再通过源腕部位姿转换到世界系；该安装关系尚未独立标定。

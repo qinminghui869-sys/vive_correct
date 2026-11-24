@@ -1,6 +1,8 @@
 # 字段与接口
 
-本文只定义坐标、审核记录和预览接口。操作见 [审核指南](user_guide.md)，整段变换见 [校准模型](hand_pipeline.md#标签刚性绑定)。模型交付报告和人工依据包同名 `observations.json`，schema 不同，不能混用。
+本文只定义坐标、审核记录和预览接口。操作见 [审核指南](user_guide.md)，整段变换见 [校准模型](hand_pipeline.md#rigid-calibration)。模型交付报告和人工依据包同名 `observations.json`，schema 不同，不能混用。
+
+<a id="coordinates"></a>
 
 ## 坐标约定
 
@@ -18,12 +20,18 @@
 
 ```json
 {
-  "axis_angles_deg": [0, 0, 0],
+  "axis_angles_deg": [
+    0,
+    0,
+    0
+  ],
   "axis_convention": "intrinsic_XYZ_degrees"
 }
 ```
 
 角度必须是三个有限数，采用本地内禀 XYZ，`C = Rx(α) Ry(β) Rz(γ)`，右乘源腕部旋转。绕当前轴按钮使用 `C_new = C × R_axis(Δ)` 合成，再转为等效内禀 XYZ 角；手动输入与四角校正使用相同字段；零角度表示恢复源方向。schema 2 加载时保留选择并默认零角度，必须重新审核。
+
+<a id="ai-record"></a>
 
 ## AI 建议记录
 
@@ -35,7 +43,7 @@
 - `input_signature`、`calibration`、`model`、`endpoint`：输入与计算版本绑定、配置路径及模型来源。
 - 加载时附加 `valid` 和 `revision`；版本失效时不能继续以该建议提交审核。
 
-人工记录的可选 `ai_reference` 指向采用的建议修订；人工修改帧、四角或方向后清除该关联。模型响应约束与拼接图布局见 [AI 预审](ai_review.md#输入与处理边界)。
+人工记录的可选 `ai_reference` 指向采用的建议修订；人工修改帧、四角或方向后清除该关联。模型响应约束与拼接图布局见 [AI 预审](ai_review.md#review-scope)。
 
 ## 整条不通过记录
 
@@ -44,19 +52,23 @@
 ```json
 {
   "schema_version": 1,
-  "entries": [{
-    "episode": "/data/stove/sample",
-    "video": "/data/stove/sample/videos/chunk-000/observation.images.headband_left_rgb_rectified/episode_000000.mp4",
-    "features_file": "/output/features/sample/features.json",
-    "reviewer": "reviewer-id",
-    "reason": "标签严重遮挡",
-    "rejected_at": "2026-11-19T08:00:00+00:00",
-    "review_revision": null
-  }]
+  "entries": [
+    {
+      "episode": "/data/stove/sample",
+      "video": "/data/stove/sample/videos/chunk-000/observation.images.headband_left_rgb_rectified/episode_000000.mp4",
+      "features_file": "/output/features/sample/features.json",
+      "reviewer": "reviewer-id",
+      "reason": "标签严重遮挡",
+      "rejected_at": "2026-11-19T08:00:00+00:00",
+      "review_revision": null
+    }
+  ]
 }
 ```
 
 `episode` 是去重键；路径由服务端生成。原因可为空，`review_revision` 表示拒绝时已有人工记录的版本。接口返回 `status="excluded"`、`approved=false` 与 `exclusion` 记录；已排除条目不能用普通保存或通过接口恢复。清单原子写入并同步落盘，先记录排除再使旧输出索引失效。
+
+<a id="approval-bundle"></a>
 
 ## 依据包
 
@@ -82,6 +94,8 @@
 
 接口仅服务本机会话。POST 请求使用 `Content-Type: application/json` 和页面下发的 `X-Review-Token`。数据 `id` 由持久化目录分配，只追加，不随新结果或服务重启重排。
 
+<a id="axis-preview"></a>
+
 ### 只读轴向预览
 
 `POST /api/axis-preview?id=0`：
@@ -90,8 +104,29 @@
 {
   "side": "left",
   "frame_index": 100,
-  "quad": [[120, 262], [180, 262], [180, 298], [120, 298]],
-  "axis_angles_deg": [0, 0, 0],
+  "quad": [
+    [
+      120,
+      262
+    ],
+    [
+      180,
+      262
+    ],
+    [
+      180,
+      298
+    ],
+    [
+      120,
+      298
+    ]
+  ],
+  "axis_angles_deg": [
+    0,
+    0,
+    0
+  ],
   "axis_convention": "intrinsic_XYZ_degrees"
 }
 ```
@@ -99,7 +134,7 @@
 数值仅示意格式。成功返回单侧位姿、投影与 `calibration_sample`，并提供四角校正建议：
 
 - `corner_correction`：`axis_angles_deg`、`axis_convention`、`rotation_camera_target`、`geometry_convention`、`pnp_axis_convention`、`baseline_local_rotation`、`plane_ambiguous`、`physical_axes_verified`。
-- `pnp_axis_convention`：配置选择的 [PnP 轴定义](../calibrations/README.md#pnp-建议轴)；`baseline_local_rotation` 为标签基准到建议轴的本地右乘矩阵。
+- `pnp_axis_convention`：配置选择的 [PnP 轴定义](../calibrations/README.md#pnp-axes)；`baseline_local_rotation` 为标签基准到建议轴的本地右乘矩阵。
 - `geometry_convention`：默认 `X_left_Y_up_Z_forward`；批次转换后为 `X_left_Y_negative_label_normal_Z_tangent`。均不表示已识别设备朝向。
 - 建议无法生成时 `corner_correction=null`，原因在 `corner_correction_error`；有效的手动轴向预览仍可返回。
 

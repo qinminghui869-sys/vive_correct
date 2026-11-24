@@ -4,7 +4,7 @@ AI 预审默认关闭。它只检查 OpenCV 最终选中的结果，不遍历候
 
 ## 启用
 
-在 [CV 选帧](cv_detection.md) 命令后加 `--ai-final-review`。默认 `transport=api`。模型、地址和密钥读 `vive_correct/openai.local.json`，该文件优先于环境变量。格式见 [示例](../vive_correct/openai.example.json)，当前示例模型为 `qwen3.8-max`。`--model`、`--api-key` 或 `--model-config` 可覆盖它。
+在 [CV 选帧](cv_detection.md) 命令后加 `--ai-final-review`。默认 `transport=api`。模型、地址和密钥读 `vive_correct/openai.local.json`，该文件优先于环境变量。格式见 [示例](../vive_correct/openai.example.json)，当前示例模型为 `qwen3.8-max`。`--model` 或 `--model-config` 可覆盖它。
 
 Codex 通道显式加 `--transport codex`。模型名来自 [run.yaml](../vive_correct/config/run.yaml)，可用 `--codex-model` 覆盖。
 
@@ -16,6 +16,8 @@ python3 -m vive_correct review --out outputs/ks3
 ```
 
 `--jobs` 是 OpenCV 并发，`--model-jobs` 是 AI 并发，`--model-timeout` 是单次超时。一条选帧发布后就可以审核；选帧进程会等已排队的 AI 结束。`--dry-run` 不调用模型。
+
+<a id="review-scope"></a>
 
 ## 输入与处理边界
 
@@ -30,10 +32,10 @@ python3 -m vive_correct review --out outputs/ks3
 
 ## L3_test_data/new 批次
 
-本批使用 [new_codex_review_mount.json](../configs/new_codex_review_mount.json)，轴定义为 `wrist_y_normal`。该定义已包含局部 X −90°。AI 和人工「按四角校正」都用这一次转换，不要再补转。约定见 [PnP 建议轴](../calibrations/README.md#pnp-建议轴)。
+本批使用 [new_codex_review_mount.json](../configs/new_codex_review_mount.json)，轴定义为 `wrist_y_normal`。该定义已包含局部 X −90°。AI 和人工「按四角校正」都用这一次转换，不要再补转。约定见 [PnP 建议轴](../calibrations/README.md#pnp-axes)。
 
 ```bash
-bash scripts/run_cv.sh <dataset> outputs/new_review \
+bash scripts/run_cv.sh /path/to/dataset outputs/new_review \
   --ai-final-review --model-jobs 2 \
   --initial-mount configs/new_codex_review_mount.json
 
@@ -45,6 +47,6 @@ python3 -m vive_correct review --out outputs/new_review \
 
 ## 结果与人工接管
 
-`features/.../ai_review.json` 保存原结果、建议、原因和输入签名。字段见 [AI 建议记录](observations_schema.md#ai-建议记录)。相同输入和模型的完成结果可复用。输入或计算代码变化后，旧建议失效。
+`features/.../ai_review.json` 保存原结果、建议、原因和输入签名。字段见 [AI 建议记录](observations_schema.md#ai-record)。相同输入和模型的完成结果可复用。输入或计算代码变化后，旧建议失效。
 
-页面上如何应用、恢复和处理失效建议，见 [人工审核](user_guide.md#ai-建议可选)。AI 不改写人工记录或源文件。
+页面上如何应用、恢复和处理失效建议，见 [人工审核](user_guide.md#ai-advice)。AI 不改写人工记录或源文件。

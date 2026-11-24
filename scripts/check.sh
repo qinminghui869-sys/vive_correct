@@ -3,6 +3,7 @@
 set -euo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")/.."
 
+python3 scripts/check_docs.py
 python3 -m ruff check .
 python3 -m ruff format --check .
 node --check vive_correct/review/review_ui/review.js

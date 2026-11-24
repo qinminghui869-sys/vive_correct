@@ -12,11 +12,13 @@ source .venv/bin/activate
 python3 -m pip install -r requirements.txt
 ```
 
-选帧只需要矫正左目视频。审核、导出和重建还需要时间戳、姿态和标定，见 [输入要求](vive_correct/README.md#输入要求)。自定义外参时，各阶段传入同一 `--initial-mount FILE`。先核对 [相机与轴定义](calibrations/README.md)。
+选帧需要矫正左目视频；审核与重建还需要时间戳、姿态及标定，见 [输入要求](vive_correct/README.md#inputs)。自定义外参时，各阶段传入同一 `--initial-mount FILE`，约定见 [相机与轴定义](calibrations/README.md)。
+
+<a id="quick-start"></a>
 
 ## 快速开始
 
-默认读取 `/mnt/nas/synnas/脑电/KS3`。过程文件写入本仓库的 `outputs/ks3`。两种目录格式见 [输入要求](vive_correct/README.md#输入要求)。
+以下命令均在仓库根目录执行。将 `DATASET` 替换为实际数据路径；所有阶段使用相同的输出目录。
 
 ```bash
 DATASET="/path/to/dataset"
@@ -30,7 +32,7 @@ bash scripts/run_cv.sh "$DATASET" "$OUT"
 bash scripts/run_cv.sh "$DATASET" "$OUT" --ai-final-review
 ```
 
-模型配置读取 `vive_correct/openai.local.json`，格式见 [配置说明](vive_correct/README.md#配置与优先级)。所有阶段使用同一个输出目录。
+首次使用 AI 时，按 [配置说明](vive_correct/README.md#configuration) 创建 `vive_correct/openai.local.json`。
 
 另开终端启动审核，可与选帧同时进行：
 
@@ -48,7 +50,7 @@ python3 -m vive_correct view outputs/review
 python3 -m vive_correct rebuild --out outputs/review
 ```
 
-`repair` 导出 RRD，`rebuild` 另存修正 Parquet，两者都不改源文件。覆盖源数据必须显式使用 `rebuild --in-place`，范围和备份见 [重建与备份](docs/review_rebuild.md#重建与备份)。
+`repair` 导出 RRD，`rebuild` 另存修正 Parquet，两者都不改源文件。覆盖源数据必须显式使用 `rebuild --in-place`，范围和备份见 [重建与备份](docs/review_rebuild.md#rebuild-and-backup)。
 
 ## 使用边界
 
@@ -60,8 +62,9 @@ python3 -m vive_correct rebuild --out outputs/review
 
 - 操作：[输入与配置](vive_correct/README.md) · [CV 选帧](docs/cv_detection.md) · [AI 预审](docs/ai_review.md) · [人工审核](docs/user_guide.md) · [导出与重建](docs/review_rebuild.md)
 - 技术：[字段与接口](docs/observations_schema.md) · [校准模型](docs/hand_pipeline.md) · [RRD 输入](ego_data/README_rerun.md) · [开发与验证](docs/development.md)
-- 历史记录，不作为当前能力承诺：[安装标定](docs/hand_calibration.md) · [模型实验](docs/experiments.md) · [CV 验证](docs/cv_validation.md)
+- 专项工具：[手部安装标定](docs/hand_calibration.md) · [模型对比实验](docs/experiments.md)
+- 验证记录：[Smoke 测试](docs/smoke_test.md) · [CV 历史验证](docs/cv_validation.md)（不代表当前精度）
 
 ## 验证
 
-提交前运行 `bash scripts/check.sh`。真实数据 smoke 测试的命令与验收边界见 [Smoke 测试](docs/smoke_test.md)。
+安装开发依赖后运行 `bash scripts/check.sh`，包含文档链接检查、静态检查和单元测试。完整步骤见 [开发与验证](docs/development.md#checks)。

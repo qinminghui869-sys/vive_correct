@@ -10,8 +10,16 @@
 {
   "frame": 100,
   "split": "train",
-  "source_tracker_m": [0.01, -0.08, -0.05],
-  "target_tracker_m": [0.02, -0.07, -0.04]
+  "source_tracker_m": [
+    0.01,
+    -0.08,
+    -0.05
+  ],
+  "target_tracker_m": [
+    0.02,
+    -0.07,
+    -0.04
+  ]
 }
 ```
 
