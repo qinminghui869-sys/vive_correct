@@ -5,7 +5,7 @@ from tempfile import TemporaryDirectory
 import unittest
 from unittest.mock import patch
 
-from vive_correct.review_io import atomic_json, read_json
+from vive_correct.review.review_io import atomic_json, read_json
 
 
 class ReviewIOTests(unittest.TestCase):
@@ -19,7 +19,7 @@ class ReviewIOTests(unittest.TestCase):
                     with self.assertRaises(ValueError):
                         atomic_json(path, {"offset": float("nan")}, durable=durable)
                     with patch(
-                        "vive_correct.review_io.os.replace", side_effect=OSError("disk full")
+                        "vive_correct.review.review_io.os.replace", side_effect=OSError("disk full")
                     ):
                         with self.assertRaises(OSError):
                             atomic_json(path, {"status": "new"}, durable=durable)

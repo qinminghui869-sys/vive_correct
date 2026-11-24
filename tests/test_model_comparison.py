@@ -4,7 +4,7 @@ from tempfile import TemporaryDirectory
 import unittest
 
 from vive_correct.batch.automatic import write_json
-from vive_correct.model_comparison import combine, model_label
+from vive_correct.ai.model_comparison import combine, model_label
 
 
 class ModelComparisonTests(unittest.TestCase):

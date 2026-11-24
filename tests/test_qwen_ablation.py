@@ -18,7 +18,7 @@ from vive_correct.run_dataset import main
 
 class AblationTests(unittest.TestCase):
     def test_summary_keeps_missing_samples_and_does_not_compare_different_frame_positions(self):
-        from vive_correct.ablation import summarize
+        from vive_correct.ai.ablation import summarize
 
         with TemporaryDirectory() as temporary:
             work = Path(temporary)
@@ -67,7 +67,7 @@ class AblationTests(unittest.TestCase):
                         ]
                     ),
                 )
-            with patch("vive_correct.ablation_report.render"):
+            with patch("vive_correct.ai.ablation_report.render"):
                 result = summarize(work)
             self.assertEqual(result["summary"]["off"]["total_samples"], 2)
             self.assertEqual(result["summary"]["on"]["missing_input"], 1)
@@ -82,7 +82,7 @@ class AblationTests(unittest.TestCase):
                 dict(kind="content_rejected", candidate_ids=["a", "b", "c", "d"])
             ]
             write_json(report, rejected)
-            with patch("vive_correct.ablation_report.render"):
+            with patch("vive_correct.ai.ablation_report.render"):
                 result = summarize(work)
             self.assertEqual(result["summary"]["on"]["service_rejected_candidates"], 4)
             self.assertEqual(result["summary"]["on"]["incomplete_review_samples"], 1)

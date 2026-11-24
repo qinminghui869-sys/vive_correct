@@ -8,10 +8,11 @@ import subprocess
 import sys
 
 from vive_correct.batch.report_io import digest
-from vive_correct.viewer import launch
-from vive_correct.hand_repair import prepare_hands
+from vive_correct.export.viewer import launch
+from vive_correct.export.hand_repair import prepare_hands
+from vive_correct.data.layout import timestamp_file
 
-ROOT = Path(__file__).resolve().parent.parent
+ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_MOUNT = ROOT / "calibrations/left_camera_to_head_vive.json"
 DEPTH_KEY = "observation.images.depth_headband_left_rectified"
 
@@ -51,7 +52,7 @@ def export_recordings(work, calibration, *, open_viewer=False):
                 report = manifest_path.parent / report
             if digest(report) != entry["report_sha256"]:
                 raise ValueError("Reviewed report hash mismatch")
-            from vive_correct.human_review import verify_provenance
+            from vive_correct.review.human_review import verify_provenance
 
             verify_provenance(json.loads(report.read_text()))
             if entry.get("alignment"):
@@ -88,11 +89,11 @@ def export_recordings(work, calibration, *, open_viewer=False):
             hand_status_path.write_text(
                 json.dumps(hand_status, ensure_ascii=False, indent=2) + "\n"
             )
-            time_path = episode / "data/chunk-000/episode_000000" / f"{DEPTH_KEY}.parquet"
+            time_path = timestamp_file(episode, DEPTH_KEY)
             if not time_path.is_file():
                 from vive_correct.estimate.geometry import VIDEO_KEY
 
-                time_path = episode / "data/chunk-000/episode_000000" / f"{VIDEO_KEY}.parquet"
+                time_path = timestamp_file(episode, VIDEO_KEY)
             times = pq.read_table(time_path)["timestamp"]
             if not len(times):
                 raise ValueError("Export timeline is empty")

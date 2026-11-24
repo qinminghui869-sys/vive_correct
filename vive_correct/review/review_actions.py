@@ -3,19 +3,19 @@
 import argparse
 import uuid
 from time import perf_counter
-from vive_correct.task_locks import operation_lock
+from vive_correct.runtime.task_locks import operation_lock
 from pathlib import Path
 
 from vive_correct.batch.report_io import digest
-from vive_correct.human_review import (
+from vive_correct.review.human_review import (
     ReviewStore,
     output_directory,
 )
-from vive_correct.rerun_export import DEFAULT_MOUNT, export_recordings
-from vive_correct.review_bundle import load_bundle, stage_files
-from vive_correct.review_io import atomic_json, merge_rows, output_lock, read_json
-from vive_correct.source_data import apply_files, baseline_read
-from vive_correct.review_exclusions import skipped
+from vive_correct.export.rerun_export import DEFAULT_MOUNT, export_recordings
+from vive_correct.review.review_bundle import load_bundle, stage_files
+from vive_correct.review.review_io import atomic_json, merge_rows, output_lock, read_json
+from vive_correct.data.source_data import apply_files, baseline_read
+from vive_correct.review.review_exclusions import skipped
 
 
 def export_approved(store, index, calibration, progress=None):

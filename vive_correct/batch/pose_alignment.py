@@ -6,7 +6,6 @@ requires observations with consistent physical axes, not per-image axis naming.
 """
 
 from dataclasses import dataclass, field
-from pathlib import Path
 
 import numpy as np
 import pyarrow.parquet as pq
@@ -14,6 +13,7 @@ from scipy.optimize import least_squares
 from scipy.spatial.transform import Rotation, Slerp
 
 from vive_correct.config import batch_settings
+from vive_correct.data.layout import data_directory
 
 _CALIBRATION = batch_settings()["calibration"]
 
@@ -95,7 +95,7 @@ class PoseStream:
 def load_streams(
     episode, sequence=_CALIBRATION["euler_sequence"], degrees=_CALIBRATION["euler_degrees"]
 ):
-    root = Path(episode) / "data/chunk-000/episode_000000"
+    root = data_directory(episode)
     return {
         side: PoseStream.load(root / f"observation.{key}.parquet", sequence, degrees)
         for side, key in [

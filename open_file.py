@@ -31,11 +31,16 @@ MEDIA = {".mp4", ".mkv", ".mov", ".png", ".jpg", ".jpeg", ".webp", ".gif", ".bmp
 
 
 def episode_root(path: Path) -> Path | None:
+    from vive_correct.data.layout import is_indexed_episode
+
     start = path if path.is_dir() else path.parent
     for candidate in (start, *start.parents):
+        if is_indexed_episode(candidate):
+            return candidate
         data = candidate / "data/chunk-000/episode_000000"
         videos = candidate / "videos/chunk-000"
-        if data.is_dir() and videos.is_dir():
+        siblings = data.parent.glob("episode_*") if data.parent.is_dir() else ()
+        if data.is_dir() and videos.is_dir() and sum(1 for _ in siblings) <= 1:
             return candidate
     return None
 
@@ -58,7 +63,9 @@ def synced_initial_frame(episode: Path, prefer: int = 300, tolerance: float = 0.
     import pyarrow.parquet as pq
     from render_rerun import nearest, table
 
-    data = episode / "data/chunk-000/episode_000000"
+    from vive_correct.data.layout import data_directory
+
+    data = data_directory(episode)
     times = pq.read_table(data / f"{DEPTH_KEY}.parquet")["timestamp"].to_numpy()
     streams = [table(data / f"observation.{name}.parquet") for name in POSE_NAMES]
     count = len(times)

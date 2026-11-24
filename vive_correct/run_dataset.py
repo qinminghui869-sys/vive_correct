@@ -19,7 +19,7 @@ from vive_correct.batch.report_io import digest, write_json
 from vive_correct.batch.bilateral_search import scan_manifest
 from vive_correct.batch.workflow import BatchConfig, run as run_batch
 from vive_correct.config import run_settings
-from vive_correct.dataset import (
+from vive_correct.data.dataset import (
     TIMESTAMP_SUFFIX as TIMESTAMP_SUFFIX,
     VIDEO_SUFFIX as VIDEO_SUFFIX,
     discover as discover,
@@ -31,9 +31,11 @@ from vive_correct.dataset import (
 )
 from vive_correct.estimate.find_stable_frame import SelectionConfig
 from vive_correct.estimate.sticker_pipeline import run as estimate
-from vive_correct.rerun_export import DEFAULT_MOUNT, check_dependencies, export_recordings
+from vive_correct.export.rerun_export import DEFAULT_MOUNT, check_dependencies, export_recordings
 
-DEFAULT_DATASET = Path("samples")
+REPO = Path(__file__).resolve().parents[1]
+DEFAULT_DATASET = Path("/mnt/nas/synnas/脑电/KS3")
+DEFAULT_OUTPUT = REPO / "outputs" / "ks3"
 
 
 def reusable(entry, signature):
@@ -217,12 +219,20 @@ def main(argv=None):
         action="store_true",
         help="Print the effective plan without model requests or output writes (all/features)",
     )
-    parser.add_argument("--dataset", type=Path, default=DEFAULT_DATASET)
+    parser.add_argument(
+        "--dataset",
+        type=Path,
+        default=DEFAULT_DATASET,
+        help="Dataset root. Default: /mnt/nas/synnas/脑电/KS3",
+    )
     parser.add_argument(
         "--episodes-file", type=Path, help="JSON list of episode paths relative to dataset"
     )
     parser.add_argument(
-        "--out", type=Path, required=True, help="Work directory; resume unchanged estimates"
+        "--out",
+        type=Path,
+        default=DEFAULT_OUTPUT,
+        help="Process directory. Default: outputs/ks3 under this repository",
     )
     parser.add_argument(
         "--stage",
@@ -278,7 +288,7 @@ def main(argv=None):
     parser.add_argument(
         "--model-config",
         type=Path,
-        help="API connection JSON; used only with --transport api",
+        help="API connection JSON. Default: vive_correct/openai.local.json, which overrides environment variables",
     )
     parser.add_argument("--model", help="Override the exact recognition model name")
     parser.add_argument("--transport", choices=("api", "codex"))
@@ -373,14 +383,14 @@ def main(argv=None):
         if args.stage == "gallery":
             features = output / "batch/delivery/features_summary.json"
             if features.exists():
-                from vive_correct.cv_features import render_features
+                from vive_correct.cv.cv_features import render_features
 
                 saved = json.loads(features.read_text())
                 render_features(output, saved["episodes"], saved["detector_config"])
                 return 0
             cv_summary = output / "batch/delivery/summary.json"
             if cv_summary.exists() and "detector_config" in json.loads(cv_summary.read_text()):
-                from vive_correct.cv_dataset import render_cv_delivery
+                from vive_correct.cv.cv_dataset import render_cv_delivery
 
                 summary = json.loads(cv_summary.read_text())
                 entries = json.loads((output / "batch_state.json").read_text())["entries"]
@@ -440,7 +450,7 @@ def main(argv=None):
         if args.stage == "features":
             if args.qwen_review != "off":
                 raise ValueError("--stage features requires --profile cv or --model-review off")
-            from vive_correct.cv_features import run_feature_dataset
+            from vive_correct.cv.cv_features import run_feature_dataset
             from vive_correct.estimate.cv_config import CVConfig
 
             return run_feature_dataset(args, dataset, output, CVConfig.load(args.cv_config))
@@ -489,7 +499,7 @@ def main(argv=None):
                 raise ValueError(
                     "Tracked CV outputs label observations; Rerun repair needs independently verified identities"
                 )
-            from vive_correct.cv_dataset import run_cv_dataset
+            from vive_correct.cv.cv_dataset import run_cv_dataset
             from vive_correct.estimate.cv_config import CVConfig
 
             return run_cv_dataset(

@@ -1,6 +1,6 @@
 # 导出、重建与排错
 
-启动和页面操作见 [快速开始](../README.md#快速开始) 与 [审核指南](user_guide.md)。命令在仓库根目录执行，把 `outputs/review` 换成实际输出目录。
+启动和页面操作见 [快速开始](../README.md#快速开始) 与 [审核指南](user_guide.md)。命令在仓库根目录执行。默认过程目录是 `outputs/ks3`。
 
 ## 状态与处理范围
 
@@ -15,8 +15,8 @@
 ## 导出与查看
 
 ```bash
-python3 -m vive_correct repair --out outputs/review --export-jobs 1
-python3 -m vive_correct view outputs/review
+python3 -m vive_correct repair --out outputs/ks3 --export-jobs 1
+python3 -m vive_correct view outputs/ks3
 ```
 
 `repair` 不代替审核。`view` 只打开已有录制。输入、审核、标定、代码和产物都没变时复用结果。深度不够时走 RGB；完整录制的输入见 [RRD 说明](../ego_data/README_rerun.md#完整-rrd-的输入)。
@@ -24,13 +24,13 @@ python3 -m vive_correct view outputs/review
 ## 重建与备份
 
 ```bash
-python3 -m vive_correct rebuild --out outputs/review
-python3 -m vive_correct rebuild --out outputs/review --in-place
+python3 -m vive_correct rebuild --out outputs/ks3
+python3 -m vive_correct rebuild --out outputs/ks3 --in-place
 ```
 
 第二条会在备份后覆盖源文件。单条加 `--episode /path/to/episode`。`review`、`repair`、`rebuild` 若用了自定义外参，必须传同一个 `--initial-mount FILE`。
 
-每条数据只改 `data/chunk-000/episode_000000/` 下的六个文件：
+每条数据只改该条数据目录下的六个文件。单条旧数据在 `data/chunk-000/episode_000000/`；多条数据集在 `data/chunk-000/episode_NNNNNN/`：
 
 - `observation.left_wrist_pose.parquet`、`observation.right_wrist_pose.parquet`
 - `action.parquet`、`observation.state.parquet` 里的左右腕部字段
@@ -47,7 +47,7 @@ python3 -m vive_correct rebuild --out outputs/review --in-place
 ## 并发与响应
 
 ```bash
-python3 -m vive_correct review --out outputs/review --port 18775 \
+python3 -m vive_correct review --out outputs/ks3 --port 18775 \
   --preview-jobs 8 --frame-jobs 8 --approve-jobs 4 --export-jobs 1 --cache-mib 2048
 ```
 

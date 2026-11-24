@@ -5,7 +5,7 @@ from unittest.mock import MagicMock, patch
 import av
 import numpy as np
 from ego_data.depth_targets import DEPTH_KEY, _nth_decoded_frame, depth_frame, plane_center
-from vive_correct.runtime_cache import CACHE
+from vive_correct.runtime.runtime_cache import CACHE
 
 
 class DepthTargetTests(unittest.TestCase):

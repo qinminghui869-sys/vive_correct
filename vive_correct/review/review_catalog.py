@@ -2,7 +2,7 @@
 
 from pathlib import Path
 
-from vive_correct.review_io import atomic_json, output_lock, read_json
+from vive_correct.review.review_io import atomic_json, output_lock, read_json
 
 
 def validate_path(output, path):

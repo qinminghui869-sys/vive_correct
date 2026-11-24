@@ -11,8 +11,8 @@ from tempfile import TemporaryDirectory
 from types import SimpleNamespace
 from unittest.mock import patch
 
-from vive_correct.cv_features import run_feature_dataset
-from vive_correct.dataset import VIDEO_SUFFIX
+from vive_correct.cv.cv_features import run_feature_dataset
+from vive_correct.data.dataset import VIDEO_SUFFIX
 from vive_correct.estimate.cv_config import CVConfig
 from vive_correct.run_dataset import main
 
@@ -52,11 +52,13 @@ class FastCLITests(unittest.TestCase):
                     output,
                     CVConfig.load(),
                 )
-            with patch("vive_correct.cv_features.run_feature_dataset", return_value=0) as features:
+            with patch(
+                "vive_correct.cv.cv_features.run_feature_dataset", return_value=0
+            ) as features:
                 self.assertEqual(main([*args, "--feature-search", "full"]), 0)
                 self.assertEqual(features.call_args.args[0].feature_search, "full")
                 self.assertEqual(features.call_args.args[0].stage, "features")
-            with patch("vive_correct.cv_dataset.run_cv_dataset", return_value=0) as tracking:
+            with patch("vive_correct.cv.cv_dataset.run_cv_dataset", return_value=0) as tracking:
                 self.assertEqual(main([*args, "--stage", "all"]), 0)
                 tracking.assert_called_once()
 
@@ -78,7 +80,7 @@ class FastCLITests(unittest.TestCase):
                 stream = io.StringIO()
                 with (
                     redirect_stdout(stream),
-                    patch("vive_correct.ai_final_review.load_config") as model,
+                    patch("vive_correct.ai.ai_final_review.load_config") as model,
                 ):
                     result = main([*args, "--dry-run", *(["--ai-final-review"] if enabled else [])])
                 self.assertEqual(result, 0)
@@ -87,7 +89,9 @@ class FastCLITests(unittest.TestCase):
                     json.loads(stream.getvalue()).get("ai_final_review", False), enabled
                 )
                 self.assertFalse((root / "out").exists())
-            with patch("vive_correct.cv_features.run_feature_dataset", return_value=0) as features:
+            with patch(
+                "vive_correct.cv.cv_features.run_feature_dataset", return_value=0
+            ) as features:
                 self.assertEqual(main([*args, "--ai-final-review"]), 0)
                 self.assertTrue(features.call_args.args[0].ai_final_review)
 

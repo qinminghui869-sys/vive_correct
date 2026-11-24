@@ -7,10 +7,10 @@
 先扫描数据集，再冻结候选对照：
 
 ```bash
-python3 -m vive_correct.ablation --dataset /path/to/dataset \
+python3 -m vive_correct.ai.ablation --dataset /path/to/dataset \
   --source-work outputs/scanned --out outputs/api_ablation
 
-python3 -m vive_correct.ablation --dataset /path/to/dataset \
+python3 -m vive_correct.ai.ablation --dataset /path/to/dataset \
   --source-work outputs/scanned --out outputs/astra_ablation \
   --transport codex --codex-model gpt-6-astra
 ```
@@ -26,7 +26,7 @@ python3 -m vive_correct.ablation --dataset /path/to/dataset \
 - `comparison.json` / `comparison.html`：覆盖、误差、请求与图像对照
 
 ```bash
-python3 -m vive_correct.model_comparison \
+python3 -m vive_correct.ai.model_comparison \
   --old outputs/previous_ablation --qwen outputs/api_ablation \
   --gpt outputs/astra_ablation --out outputs/model_comparison
 ```

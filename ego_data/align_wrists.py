@@ -46,10 +46,18 @@ class App:
         self.args = args
         self.dataset = args.dataset
         self.mount = json.loads(args.calibration.read_text())
-        self.data = self.dataset / "data/chunk-000/episode_000000"
-        self.videos = self.dataset / "videos/chunk-000"
+        from vive_correct.data.layout import (
+            annotation_dir,
+            data_directory,
+            dataset_root,
+            episode_stem,
+        )
+
+        self.data = data_directory(self.dataset)
+        self.videos = dataset_root(self.dataset) / "videos/chunk-000"
+        self.stem = episode_stem(self.dataset)
         self.depth_key = "observation.images.depth_headband_left_rectified"
-        self.ann = self.dataset / "annotation/chunk-000" / self.depth_key / "episode_000000"
+        self.ann = annotation_dir(self.dataset, self.depth_key)
         self.k = load_metadata(self.ann)["intrinsics"]["left"]
         self.times = pq.read_table(self.data / (self.depth_key + ".parquet"))[
             "timestamp"
@@ -235,11 +243,11 @@ class App:
         self.redraw()
 
     def read_frame(self, index):
-        depth = next(frames(self.videos / self.depth_key / "episode_000000.mp4", index, index))
+        depth = next(frames(self.videos / self.depth_key / f"{self.stem}.mp4", index, index))
         mask = next(frames(self.ann / "valid_mask_ffv1.mkv", index, index))
         rgb = next(
             frames(
-                self.videos / "observation.images.headband_left_rgb_rectified/episode_000000.mp4",
+                self.videos / f"observation.images.headband_left_rgb_rectified/{self.stem}.mp4",
                 index,
                 index,
                 True,

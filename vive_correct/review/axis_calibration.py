@@ -107,15 +107,15 @@ def preview(episode, side, choice, calibration):
     from pathlib import Path
     import pyarrow.parquet as pq
     from ego_data.vive_origin_alignment import build_alignment
-    from vive_correct.dataset import TIMESTAMP_SUFFIX
     from vive_correct.estimate.geometry import VIDEO_KEY
-    from vive_correct.human_review import checked_pose
+    from vive_correct.review.human_review import checked_pose
+    from vive_correct.data.layout import timestamp_file
 
     if side not in ("left", "right"):
         raise ValueError("未知物理手侧")
     axis_angles(choice)
     pose, camera = checked_pose(Path(episode), choice, side=side)
-    times = pq.read_table(Path(episode) / TIMESTAMP_SUFFIX)["timestamp"].to_numpy()
+    times = pq.read_table(timestamp_file(episode))["timestamp"].to_numpy()
     frame = choice["frame_index"]
     if frame >= len(times) or not np.isfinite(times[frame]):
         raise ValueError("参考帧缺少有效时间戳")
@@ -133,7 +133,7 @@ def preview(episode, side, choice, calibration):
     )
     result = enrich_pose(pose, alignment["samples"][0], camera.K)
     try:
-        from vive_correct.review_io import read_json
+        from vive_correct.review.review_io import read_json
 
         convention = read_json(Path(calibration)).get("pnp_axis_convention", "label_z_normal")
         result["corner_correction"] = corner_correction(result, camera, convention)

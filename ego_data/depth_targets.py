@@ -127,9 +127,10 @@ def _nth_decoded_frame(path, index):
 
 def depth_frame(episode, annotation, index):
     """Reuse exact decoded depth/mask pixels across corner edits and approval."""
-    from vive_correct.runtime_cache import CACHE, file_stamp
+    from vive_correct.data.layout import video_file
+    from vive_correct.runtime.runtime_cache import CACHE, file_stamp
 
-    video = episode / "videos/chunk-000" / DEPTH_KEY / "episode_000000.mp4"
+    video = video_file(episode, DEPTH_KEY)
     mask_video = annotation / "valid_mask_ffv1.mkv"
     stamps = (file_stamp(video), file_stamp(mask_video))
 
@@ -146,8 +147,10 @@ def depth_frame(episode, annotation, index):
 
 
 def refine_targets(episode, report):
-    data = episode / "data/chunk-000/episode_000000"
-    ann = episode / "annotation/chunk-000" / DEPTH_KEY / "episode_000000"
+    from vive_correct.data.layout import annotation_dir, data_directory
+
+    data = data_directory(episode)
+    ann = annotation_dir(episode, DEPTH_KEY)
     result = {}
     observations = report["observations"]
     try:

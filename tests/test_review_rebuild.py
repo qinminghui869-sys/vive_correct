@@ -13,12 +13,12 @@ from test_human_review import make_fixture
 
 from vive_correct.batch.report_io import digest
 from vive_correct.estimate.geometry import Camera
-from vive_correct.human_review import ReviewStore, source_signature
-from vive_correct.parquet_correction import position_groups, verify_table
-from vive_correct.review_actions import export_approved, rebuild
-from vive_correct.review_bundle import approve, review_state, stage_files
-from vive_correct.review_io import atomic_json, read_json
-from vive_correct.source_data import DATA, FILES, apply_files, original_files, recover
+from vive_correct.review.human_review import ReviewStore, source_signature
+from vive_correct.review.parquet_correction import position_groups, verify_table
+from vive_correct.review.review_actions import export_approved, rebuild
+from vive_correct.review.review_bundle import approve, review_state, stage_files
+from vive_correct.review.review_io import atomic_json, read_json
+from vive_correct.data.source_data import DATA, FILES, apply_files, original_files, recover
 
 
 class RebuildTests(unittest.TestCase):
@@ -42,7 +42,7 @@ class RebuildTests(unittest.TestCase):
 
     def test_approval_contains_geometry_images_and_does_not_touch_sources(self):
         before = self.hashes()
-        with patch("vive_correct.rerun_export.export_recordings") as render:
+        with patch("vive_correct.export.rerun_export.export_recordings") as render:
             bundle = self.approve()
             render.assert_not_called()
         self.assertEqual(before, self.hashes())
@@ -93,12 +93,12 @@ class RebuildTests(unittest.TestCase):
             state["selected"][side].update(frame_index=2, quad=quad)
             with (
                 self.subTest(side=side),
-                patch("vive_correct.human_review.Camera.load", return_value=camera),
+                patch("vive_correct.review.human_review.Camera.load", return_value=camera),
                 patch(
-                    "vive_correct.human_review.decode_frame",
+                    "vive_correct.review.human_review.decode_frame",
                     return_value=(np.zeros((1200, 1920, 3), dtype=np.uint8), 4),
                 ),
-                patch("vive_correct.rerun_export.export_recordings") as render,
+                patch("vive_correct.export.rerun_export.export_recordings") as render,
                 self.assertRaisesRegex(ValueError, f"{label}第 2 帧：重投影误差 6.94 px.*6 px"),
             ):
                 approve(self.store, 0, state, self.mount)
@@ -227,7 +227,7 @@ class RebuildTests(unittest.TestCase):
                 foreign.write_bytes(b"external backup")
             return real_link(source, destination)
 
-        with patch("vive_correct.source_data.os.link", side_effect=race):
+        with patch("vive_correct.data.source_data.os.link", side_effect=race):
             with self.assertRaises(FileExistsError):
                 apply_files(
                     self.episode, staged["files"], bundle["baseline_hashes"], bundle["directory"]
@@ -236,7 +236,7 @@ class RebuildTests(unittest.TestCase):
         self.assertEqual(foreign.read_bytes(), b"external backup")
 
     def test_render_read_guard_blocks_in_place_replacement(self):
-        from vive_correct.source_data import baseline_read
+        from vive_correct.data.source_data import baseline_read
 
         bundle = self.approve()
         staged = stage_files(bundle)
@@ -259,7 +259,7 @@ class RebuildTests(unittest.TestCase):
                 raise OSError("simulated disk failure")
             return real_replace(source, destination)
 
-        with patch("vive_correct.source_data.os.replace", side_effect=fail):
+        with patch("vive_correct.data.source_data.os.replace", side_effect=fail):
             with self.assertRaisesRegex(OSError, "simulated"):
                 apply_files(
                     self.episode, staged["files"], bundle["baseline_hashes"], bundle["directory"]
@@ -291,7 +291,7 @@ class RebuildTests(unittest.TestCase):
                 raise Crash()
             return real_replace(source, destination)
 
-        with patch("vive_correct.source_data.os.replace", side_effect=crash):
+        with patch("vive_correct.data.source_data.os.replace", side_effect=crash):
             with self.assertRaises(Crash):
                 apply_files(
                     self.episode, staged["files"], bundle["baseline_hashes"], bundle["directory"]
@@ -353,7 +353,7 @@ class RebuildTests(unittest.TestCase):
         row = export_approved(self.store, 0, self.mount)
         self.assertEqual(row["status"], "complete", row)
         self.assertTrue(Path(row["recording"]).exists())
-        with patch("vive_correct.review_actions.export_recordings") as render:
+        with patch("vive_correct.review.review_actions.export_recordings") as render:
             cached = export_approved(self.store, 0, self.mount)
             self.assertTrue(cached["reused"])
             render.assert_not_called()

@@ -14,8 +14,8 @@ from ego_data.vive_origin_alignment import build_alignment
 from vive_correct.batch.automatic import run_automatic
 from vive_correct.batch.report_io import digest, write_json
 from vive_correct.estimate.openai_vision import OpenAIConfig, load_config
-from vive_correct.dataset import discover, input_signature
-from vive_correct.rerun_export import DEFAULT_MOUNT
+from vive_correct.data.dataset import discover, input_signature
+from vive_correct.export.rerun_export import DEFAULT_MOUNT
 
 
 def prepare(source, output, dataset):
@@ -212,7 +212,7 @@ def summarize(output):
             },
         )
     write_json(output / "comparison.json", result)
-    from vive_correct.ablation_report import render
+    from vive_correct.ai.ablation_report import render
 
     render(output, result)
     return result

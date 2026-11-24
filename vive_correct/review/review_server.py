@@ -16,18 +16,18 @@ from urllib.parse import parse_qs, urlparse
 import cv2
 import numpy as np
 
-from vive_correct.human_review import ReviewStore, decode_frame, output_directory
-from vive_correct.dataset import VIDEO_SUFFIX
-from vive_correct.rerun_export import DEFAULT_MOUNT
-from vive_correct.review_actions import export_approved
-from vive_correct.review_bundle import approve, review_state
-from vive_correct.review_io import read_json, atomic_json, output_lock
-from vive_correct.axis_calibration import preview, axis_angles, local_rotation, enrich_pose
-from vive_correct.runtime_cache import CACHE, cached_file, file_stamp, source_stamp
-from vive_correct.feature_progress import scan_progress
-from vive_correct.task_locks import reserve, adopt, operation_lock
-from vive_correct.source_data import baseline_read
-from vive_correct.review_exclusions import FILENAME
+from vive_correct.review.human_review import ReviewStore, decode_frame, output_directory
+from vive_correct.data.layout import video_file
+from vive_correct.export.rerun_export import DEFAULT_MOUNT
+from vive_correct.review.review_actions import export_approved
+from vive_correct.review.review_bundle import approve, review_state
+from vive_correct.review.review_io import read_json, atomic_json, output_lock
+from vive_correct.review.axis_calibration import preview, axis_angles, local_rotation, enrich_pose
+from vive_correct.runtime.runtime_cache import CACHE, cached_file, file_stamp, source_stamp
+from vive_correct.cv.feature_progress import scan_progress
+from vive_correct.runtime.task_locks import reserve, adopt, operation_lock
+from vive_correct.data.source_data import baseline_read
+from vive_correct.review.review_exclusions import FILENAME
 
 DEFAULT_PORT = 18763
 UI = Path(__file__).with_name("review_ui")
@@ -149,7 +149,7 @@ class ReviewServer(ThreadingHTTPServer):
             )
 
     def state(self, index, *, full=False):
-        from vive_correct.ai_final_review import load_advice
+        from vive_correct.ai.ai_final_review import load_advice
 
         state = self._state(index, full=full)
         state["ai_review"] = load_advice(self.store.path(index), self.calibration)
@@ -303,7 +303,7 @@ class ReviewServer(ThreadingHTTPServer):
                     raise ValueError("无法编码原帧")
                 return encoded.tobytes()
 
-        return cached_file(("frame_png", frame), episode / VIDEO_SUFFIX, encode)
+        return cached_file(("frame_png", frame), video_file(episode), encode)
 
 
 class ReviewHandler(BaseHTTPRequestHandler):

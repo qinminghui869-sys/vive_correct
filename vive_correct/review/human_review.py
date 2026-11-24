@@ -9,7 +9,16 @@ import numpy as np
 import pyarrow.parquet as pq
 
 from vive_correct.batch.report_io import digest
-from vive_correct.dataset import TIMESTAMP_SUFFIX, VIDEO_SUFFIX, input_signature
+from vive_correct.data.dataset import input_signature
+from vive_correct.data.layout import (
+    calibration_file,
+    data_directory,
+    dataset_root,
+    episode_stem,
+    is_indexed_episode,
+    timestamp_file,
+    video_file,
+)
 from vive_correct.estimate.geometry import (
     VIDEO_KEY,
     Camera,
@@ -17,13 +26,13 @@ from vive_correct.estimate.geometry import (
     estimate_pose,
     order_quad,
 )
-from vive_correct.review_io import atomic_json, output_lock, read_json
+from vive_correct.review.review_io import atomic_json, output_lock, read_json
 
-from vive_correct.axis_calibration import CONVENTION, axis_angles, prepare_pose
-from vive_correct.runtime_cache import cached_file
-from vive_correct.review_catalog import refresh_catalog
-from vive_correct.review_exclusions import FILENAME, exclusion
-from vive_correct.task_locks import operation_lock
+from vive_correct.review.axis_calibration import CONVENTION, axis_angles, prepare_pose
+from vive_correct.runtime.runtime_cache import cached_file
+from vive_correct.review.review_catalog import refresh_catalog
+from vive_correct.review.review_exclusions import FILENAME, exclusion
+from vive_correct.runtime.task_locks import operation_lock
 
 SIDES = ("left", "right")
 
@@ -38,17 +47,25 @@ def output_directory(value):
 
 def source_signature(episode):
     """Hash the six baseline Parquets; use size/mtime for other input files."""
-    from vive_correct.source_data import DATA, FILES, original_files
+    from vive_correct.data.source_data import FILES, original_files
 
     episode = Path(episode)
     originals = original_files(episode)
     result = {}
-    for folder in ("data", "videos", "calibrations", "annotation"):
-        for p in sorted((episode / folder).rglob("*")):
+    root = dataset_root(episode) if is_indexed_episode(episode) else episode
+    folders = ("data", "videos", "calibrations", "annotation")
+    stem = episode_stem(episode)
+    for folder in folders:
+        base = root / folder
+        for p in sorted(base.rglob("*")) if base.is_dir() else []:
             if not p.is_file() or p.name.endswith((".bak", ".restore")):
                 continue
-            relative = p.relative_to(episode)
-            if relative.parent == DATA and p.name in FILES:
+            if is_indexed_episode(episode) and folder in ("data", "videos", "annotation"):
+                if p.stem != stem and stem not in p.parts:
+                    continue
+            relative = p.relative_to(root)
+            data_parent = data_directory(episode).relative_to(root)
+            if relative.parent == data_parent and p.name in FILES:
                 result[str(relative)] = {"sha256": digest(originals[p.name])}
             else:
                 stat = p.stat()
@@ -57,14 +74,14 @@ def source_signature(episode):
 
 
 def decode_frame(episode, index):
-    video = Path(episode) / VIDEO_SUFFIX
+    video = video_file(episode)
     return cached_file(("frame", index), video, lambda: _decode_frame(episode, index))
 
 
 def _decode_frame(episode, index):
     if type(index) is not int or index < 0:
         raise ValueError("帧号必须为从 0 开始的非负整数")
-    video = Path(episode) / VIDEO_SUFFIX
+    video = video_file(episode)
     capture = cv2.VideoCapture(str(video))
     try:
         if not capture.isOpened():
@@ -83,7 +100,7 @@ def _decode_frame(episode, index):
 
 def checked_pose(episode, choice, *, side=None):
     image, _ = decode_frame(episode, choice.get("frame_index"))
-    camera_path = Path(episode) / "calibrations/rectify_params.yaml"
+    camera_path = calibration_file(episode)
     camera = cached_file("camera", camera_path, lambda: Camera.load(camera_path))
     height, width = image.shape[:2]
     if camera.resolution != (width, height):
@@ -241,7 +258,7 @@ class ReviewStore:
                 raise ValueError("输入或特征报告已变化，请重新加载并审核")
             ai_reference = payload.get("ai_reference")
             if ai_reference:
-                from vive_correct.ai_final_review import load_advice
+                from vive_correct.ai.ai_final_review import load_advice
 
                 advice = load_advice(self.path(index), getattr(self, "ai_calibration", None))
                 if (
@@ -346,7 +363,7 @@ class ReviewStore:
             episode = str(Path(current["episode"]).resolve())
             record = dict(
                 episode=episode,
-                video=str(Path(episode) / VIDEO_SUFFIX),
+                video=str(video_file(episode)),
                 features_file=str(self.path(index)),
                 reviewer=reviewer,
                 reason=str(payload.get("reason", "")).strip(),
@@ -403,7 +420,7 @@ class ReviewStore:
         episode = Path(review["episode"]).resolve()
         selected = review["selected"]
         self.check_distinct(selected)
-        times = pq.read_table(episode / TIMESTAMP_SUFFIX)["timestamp"].to_numpy()
+        times = pq.read_table(timestamp_file(episode))["timestamp"].to_numpy()
         observations = {}
         for side in SIDES:
             choice = selected[side]

@@ -14,6 +14,7 @@ from vive_correct.estimate.find_stable_frame import Episode
 from vive_correct.estimate.geometry import MAX_RMS_PX
 from vive_correct.estimate.label_detection import detect_labels
 from vive_correct.batch.report_io import digest
+from vive_correct.data.layout import calibration_file
 
 
 def fixed_pose(corners, object_points, camera, previous):
@@ -193,9 +194,7 @@ def calibrate(report_path, initial_mount_path, output):
     output.mkdir(parents=True, exist_ok=True)
     initial = json.loads(Path(initial_mount_path).read_text())
     head_camera = np.asarray(initial["T_head_raw_camera"], float).copy()
-    rectification = np.asarray(
-        yaml.safe_load((episode.path / "calibrations/rectify_params.yaml").read_text())["R1"]
-    )
+    rectification = np.asarray(yaml.safe_load(calibration_file(episode.path).read_text())["R1"])
     head_camera[:3, :3] = head_camera[:3, :3] @ rectification.T
     result = {
         "episode": str(episode.path),

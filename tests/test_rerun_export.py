@@ -11,7 +11,7 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 
 from vive_correct.batch.report_io import digest
-from vive_correct.rerun_export import DEPTH_KEY, export_recordings
+from vive_correct.export.rerun_export import DEPTH_KEY, export_recordings
 
 
 class RerunExportTests(unittest.TestCase):
@@ -54,12 +54,12 @@ class RerunExportTests(unittest.TestCase):
             root = Path(temporary)
             self.fixture(root)
             with (
-                patch("vive_correct.rerun_export.check_dependencies"),
+                patch("vive_correct.export.rerun_export.check_dependencies"),
                 patch(
                     "ego_data.vive_origin_alignment.build_alignment",
                     return_value={"pose_euler_sequence": "zyx", "pose_degrees": False},
                 ),
-                patch("vive_correct.rerun_export.subprocess.run", side_effect=self.render),
+                patch("vive_correct.export.rerun_export.subprocess.run", side_effect=self.render),
             ):
                 self.assertEqual(export_recordings(root, root / "mount.json"), 0)
             row = json.loads((root / "rerun/manifest.json").read_text())["entries"][0]
@@ -73,7 +73,7 @@ class RerunExportTests(unittest.TestCase):
             root = Path(temporary)
             self.fixture(root).write_text('{"changed": true}')
             with (
-                patch("vive_correct.rerun_export.check_dependencies"),
+                patch("vive_correct.export.rerun_export.check_dependencies"),
                 patch("ego_data.vive_origin_alignment.build_alignment") as build,
             ):
                 self.assertEqual(export_recordings(root, root / "mount.json"), 1)
@@ -84,16 +84,16 @@ class RerunExportTests(unittest.TestCase):
             root = Path(temporary)
             self.fixture(root)
             with (
-                patch("vive_correct.rerun_export.check_dependencies"),
+                patch("vive_correct.export.rerun_export.check_dependencies"),
                 patch(
                     "ego_data.vive_origin_alignment.build_alignment",
                     return_value={"pose_euler_sequence": "xyz", "pose_degrees": True},
                 ),
                 patch(
-                    "vive_correct.rerun_export.subprocess.run",
+                    "vive_correct.export.rerun_export.subprocess.run",
                     side_effect=subprocess.CalledProcessError(1, "renderer"),
                 ),
-                patch("vive_correct.rerun_export.launch") as viewer,
+                patch("vive_correct.export.rerun_export.launch") as viewer,
             ):
                 self.assertEqual(export_recordings(root, root / "mount.json", open_viewer=True), 1)
                 viewer.assert_not_called()

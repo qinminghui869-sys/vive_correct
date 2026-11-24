@@ -11,6 +11,7 @@ from scipy.spatial.transform import Rotation
 from ego_data.tracking_sync import resample_tracking
 from vive_correct.batch.hand_overlay import JOINTS
 from vive_correct.batch.report_io import digest
+from vive_correct.data.layout import data_directory
 
 NODES = np.array([0, 1, 2, 3, 4, 6, 7, 8, 9, 11, 12, 13, 14, 16, 17, 18, 19, 21, 22, 23, 24])
 OFFSET = np.array([0.0, -0.085, -0.058])
@@ -66,7 +67,7 @@ def repair(episode, output):
     episode, output = Path(episode).resolve(), Path(output).resolve()
     if output == episode or episode in output.parents or output in episode.parents:
         raise ValueError("Repair output must be separate from source data")
-    data = episode / "data/chunk-000/episode_000000"
+    data = data_directory(episode)
     source = data / "observation.hand_skeleton.parquet"
     raw = pq.read_table(source)
     times = raw["timestamp"].to_numpy()

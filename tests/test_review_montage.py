@@ -2,7 +2,7 @@
 
 import unittest
 import numpy as np
-from vive_correct.review_montage import crop_bounds, compose_review_image
+from vive_correct.review.review_montage import crop_bounds, compose_review_image
 
 
 class MontageTests(unittest.TestCase):

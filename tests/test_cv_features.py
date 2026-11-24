@@ -8,8 +8,13 @@ from unittest.mock import patch
 import cv2
 import numpy as np
 
-from vive_correct.cv_features import choose_features, scan_features, feature_video, RAW_LEFT_SUFFIX
-from vive_correct.dataset import VIDEO_SUFFIX
+from vive_correct.cv.cv_features import (
+    choose_features,
+    scan_features,
+    feature_video,
+    RAW_LEFT_SUFFIX,
+)
+from vive_correct.data.dataset import VIDEO_SUFFIX
 from vive_correct.estimate.cv_config import CVConfig
 from vive_correct.estimate.label_detection import black_context_metrics, label_metrics
 
@@ -95,7 +100,7 @@ class ContextTests(unittest.TestCase):
         for item in json.loads((root / "cases.json").read_text()):
             with self.subTest(name=item["name"]):
                 result = label_metrics(cv2.imread(str(root / item["image"])), item["quad"])
-                from vive_correct.cv_features import (
+                from vive_correct.cv.cv_features import (
                     feature_candidate_allowed,
                     feature_rejection_reason,
                 )
@@ -112,7 +117,7 @@ class ContextTests(unittest.TestCase):
                 )
 
     def test_truncated_body_is_reviewable_only_with_all_label_gates(self):
-        from vive_correct.cv_features import feature_rejection_reason
+        from vive_correct.cv.cv_features import feature_rejection_reason
 
         image, quads = fixture()
         candidate = dict(
@@ -137,7 +142,7 @@ class ContextTests(unittest.TestCase):
             )
 
     def test_feature_gate_rejects_acute_reflection_without_requiring_fixed_aspect(self):
-        from vive_correct.cv_features import feature_candidate_allowed
+        from vive_correct.cv.cv_features import feature_candidate_allowed
 
         image, quads = fixture()
         c = dict(label_metrics(image, quads[0]), quad=quads[0])
@@ -165,7 +170,7 @@ class FeatureTests(unittest.TestCase):
             raw.parent.mkdir(parents=True)
             raw.touch()
             self.assertEqual(feature_video(root), (root / VIDEO_SUFFIX, "rectified"))
-            with self.assertLogs("vive_correct.cv_features", level="ERROR") as logs:
+            with self.assertLogs("vive_correct.cv.cv_features", level="ERROR") as logs:
                 result = scan_features(root, root / "out", CVConfig.load())
             self.assertEqual(result["features"], {})
             self.assertEqual(result["error"], "missing_video")
@@ -222,7 +227,7 @@ class FeatureTests(unittest.TestCase):
             self.assertGreater(full["examined_frames"], result["examined_frames"])
             self.assertEqual(full["decoded_frames"], 8)
             with patch(
-                "vive_correct.cv_features.detect_label_candidates",
+                "vive_correct.cv.cv_features.detect_label_candidates",
                 return_value={"candidates": {"left": []}},
             ):
                 missing = scan_features(
@@ -242,7 +247,7 @@ class FeatureTests(unittest.TestCase):
             scan_features(root / "episode", root / "out", CVConfig.load(), stride=3)
             self.assertEqual(json.loads(review_path.read_text())["reviewer"], "preserve-me")
 
-            from vive_correct.cv_features import refilter_features
+            from vive_correct.cv.cv_features import refilter_features
 
             refined = refilter_features(
                 root / "out",
@@ -258,7 +263,7 @@ class FeatureTests(unittest.TestCase):
                 )
 
     def test_body_connected_to_glove_stays_review_only_through_scan_and_refilter(self):
-        from vive_correct.cv_features import refilter_features
+        from vive_correct.cv.cv_features import refilter_features
 
         with TemporaryDirectory() as directory:
             root = Path(directory)
@@ -296,14 +301,14 @@ class FeatureTests(unittest.TestCase):
                 path = root / suffix
                 path.parent.mkdir(parents=True, exist_ok=True)
                 path.write_bytes(b"invalid video")
-            with self.assertLogs("vive_correct.cv_features", level="ERROR"):
+            with self.assertLogs("vive_correct.cv.cv_features", level="ERROR"):
                 result = scan_features(root, root / "out", CVConfig.load())
             self.assertEqual(result["error"], "cannot_decode_video")
             self.assertEqual(result["video_space"], "rectified")
             self.assertEqual(result["features"], {})
 
     def test_raw_candidate_cache_is_rejected(self):
-        from vive_correct.cv_features import refilter_features
+        from vive_correct.cv.cv_features import refilter_features
 
         with TemporaryDirectory() as directory:
             root = Path(directory)
@@ -316,14 +321,14 @@ class FeatureTests(unittest.TestCase):
                     )
                 )
             )
-            with self.assertLogs("vive_correct.cv_features", level="ERROR"):
+            with self.assertLogs("vive_correct.cv.cv_features", level="ERROR"):
                 with self.assertRaisesRegex(ValueError, "rectified"):
                     refilter_features(root, root / "out", CVConfig.load())
 
 
 class SamplingTests(unittest.TestCase):
     def test_time_boundary_and_fractional_frame_rate(self):
-        from vive_correct.cv_features import feature_scan_phases
+        from vive_correct.cv.cv_features import feature_scan_phases
 
         phases = feature_scan_phases(700, 29.97, 15, CVConfig.load(), search="full")
         self.assertEqual(
@@ -383,10 +388,12 @@ class SamplingTests(unittest.TestCase):
             video.parent.mkdir(parents=True)
             video.touch()
             with (
-                patch("vive_correct.cv_features.cv2.VideoCapture", return_value=Capture()),
-                patch("vive_correct.cv_features.detect_label_candidates", side_effect=detector),
-                patch("vive_correct.cv_features._finish_features", side_effect=finish),
-                patch("vive_correct.cv_features.time.perf_counter", side_effect=lambda: clock[0]),
+                patch("vive_correct.cv.cv_features.cv2.VideoCapture", return_value=Capture()),
+                patch("vive_correct.cv.cv_features.detect_label_candidates", side_effect=detector),
+                patch("vive_correct.cv.cv_features._finish_features", side_effect=finish),
+                patch(
+                    "vive_correct.cv.cv_features.time.perf_counter", side_effect=lambda: clock[0]
+                ),
             ):
                 result = scan_features(root, root / "out", config or CVConfig.load(), search=search)
         return result, called
@@ -419,7 +426,7 @@ class SamplingTests(unittest.TestCase):
         self.assertEqual(result["sampled_frame_indices"], called)
 
     def test_progressive_schedule_covers_timeline_before_densifying(self):
-        from vive_correct.cv_features import progressive_samples, feature_scan_phases
+        from vive_correct.cv.cv_features import progressive_samples, feature_scan_phases
 
         phase = feature_scan_phases(1800, 30, 15, CVConfig.load())[0]
         sampled = list(progressive_samples(phase["ranges"]))
@@ -429,7 +436,7 @@ class SamplingTests(unittest.TestCase):
         self.assertEqual({min(i // 450, 3) for i in sampled[:5]}, {0, 1, 2, 3})
 
     def test_fast_schedule_reserves_samples_for_late_video(self):
-        from vive_correct.cv_features import feature_scan_phases
+        from vive_correct.cv.cv_features import feature_scan_phases
 
         for limit, budget in ((10000, 120), (100, 2), (300, 4)):
             cfg = replace(CVConfig.load(), feature_fast_max_samples=budget)

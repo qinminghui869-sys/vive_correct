@@ -49,7 +49,7 @@ def log_hand_projection(path, points, camera, intrinsic, color, inspect=False, l
 
 
 def table(path):
-    from vive_correct.source_data import original_path
+    from vive_correct.data.source_data import original_path
 
     t = pq.read_table(original_path(path))
     names = [n for n in t.column_names if n not in ("timestamp", "episode_index")]
@@ -246,10 +246,13 @@ def main():
         or args.frustum_depth < 0
     ):
         ap.error("Require stride >= 1 and 0 <= start <= end")
-    data = args.dataset / "data/chunk-000/episode_000000"
-    video = args.dataset / "videos/chunk-000"
+    from vive_correct.data.layout import annotation_dir, data_directory, dataset_root, episode_stem
+
+    data = data_directory(args.dataset)
+    video = dataset_root(args.dataset) / "videos/chunk-000"
+    stem = episode_stem(args.dataset)
     key = "observation.images.depth_headband_left_rectified"
-    ann = args.dataset / "annotation/chunk-000" / key / "episode_000000"
+    ann = annotation_dir(args.dataset, key)
     from manus_view import depth_available, export as export_manus
 
     if (args.rgb_only or not depth_available(args.dataset)) and args.wrist_calibration:
@@ -281,7 +284,7 @@ def main():
         return
     meta = load_metadata(ann)
     k = meta["intrinsics"]["left"]
-    with av.open(str(video / key / "episode_000000.mp4")) as container:
+    with av.open(str(video / key / f"{stem}.mp4")) as container:
         width, height = container.streams.video[0].width, container.streams.video[0].height
     times = pq.read_table(data / f"{key}.parquet")["timestamp"].to_numpy()
     if args.end >= len(times):
@@ -587,15 +590,15 @@ def main():
     )
     # Eye video uses its own timestamps, not the depth frame number.
     eye_iter = iter(
-        frames(video / "observation.images.eye_rgb/episode_000000.mp4", 0, len(eye_times) - 1, True)
+        frames(video / f"observation.images.eye_rgb/{stem}.mp4", 0, len(eye_times) - 1, True)
     )
     eye_idx = -1
     eye_image = None
     sources = [
-        frames(video / key / "episode_000000.mp4", args.start, args.end),
+        frames(video / key / f"{stem}.mp4", args.start, args.end),
         frames(ann / "valid_mask_ffv1.mkv", args.start, args.end),
         frames(
-            video / "observation.images.headband_left_rgb_rectified/episode_000000.mp4",
+            video / f"observation.images.headband_left_rgb_rectified/{stem}.mp4",
             args.start,
             args.end,
             True,

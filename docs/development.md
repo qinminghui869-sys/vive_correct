@@ -4,17 +4,14 @@
 
 主路径是选帧、可选 AI 预审、人工审核、版本化依据包，然后是共用修正 Parquet、RRD 或显式覆盖。同一位姿变换只实现一次。
 
-- `run_dataset.py`、`dataset.py`、`cv_features.py`：命令调度、样本发现、选帧与发布。
-- `ai_final_review.py`、`review_montage.py`：最终结果复核、局部调整和单图输入，建议独立保存。
+- `run_dataset.py`：命令调度。`data/`：目录规则、样本发现和源文件。`cv/`：选帧与发布。
+- `ai/`：最终结果复核和单图输入，建议独立保存。
 - `estimate/`、`batch/`：检测、几何、候选选择、模型复核与交付。
-- `human_review.py`、`review_exclusions.py`、`axis_calibration.py`、`review_bundle.py`：人工记录、共享轴向计算、依据包与完整性校验。
-- `review_server.py`、`review_ui/`：HTTP 接口、后台任务与浏览器交互。
-- `review_catalog.py`、`feature_progress.py`：稳定编号与选帧进度；`task_locks.py`、`runtime_cache.py`：跨进程任务锁与进程内缓存。
-- `review_actions.py`、`review_repair.py`：重建、导出和历史兼容；`parquet_correction.py`：字段保真的刚性变换。
-- `source_data.py`、`review_io.py`：原始备份、源文件事务、输出锁与 JSON 原子写入。
-- `rerun_export.py`、`ego_data/`：录制编排、同步和渲染；深度元数据统一由 `ego_data/depth_metadata.py` 解析。
+- `review/`：人工记录、轴向计算、依据包、页面和重建入口。
+- `runtime/`：跨进程任务锁与进程内缓存。
+- `export/`、`ego_data/`：录制编排、同步和渲染；深度元数据统一由 `ego_data/depth_metadata.py` 解析。
 
-计算公式见 [校准模型](hand_pipeline.md)，API 与 schema 见 [字段与接口](observations_schema.md)。检测与模型默认参数维护在 `vive_correct/config/*.yaml`；审核并发与缓存默认值维护在 `review_server.py`。显式 CLI 参数优先。
+计算公式见 [校准模型](hand_pipeline.md)，API 与 schema 见 [字段与接口](observations_schema.md)。检测与模型默认参数维护在 `vive_correct/config/*.yaml`；审核并发与缓存默认值维护在 `review/review_server.py`。显式 CLI 参数优先。
 
 ## 必须保持的约束
 
@@ -59,7 +56,7 @@ bash scripts/check.sh
 
 ```bash
 python3 -m ruff format path/to/changed.py
-npx --yes prettier@3.6.2 --write vive_correct/review_ui
+npx --yes prettier@3.6.2 --write vive_correct/review/review_ui
 ```
 
 新增测试应覆盖可观察行为：不同参考帧与同步边界、旋转与骨长、字段保真、动态发布、独立队列、缓存失效、版本冲突、重复重建及失败恢复。涉及交互时补充浏览器“调整—暂存—重载—审核—手动导出”验证；记录样本、参数、输入与代码版本，区分功能通过和精度验收。

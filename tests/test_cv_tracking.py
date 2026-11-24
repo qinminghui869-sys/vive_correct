@@ -215,7 +215,7 @@ class OfflinePipelineTests(unittest.TestCase):
         import pyarrow as pa
         import pyarrow.parquet as pq
         import yaml
-        from vive_correct.dataset import VIDEO_SUFFIX, TIMESTAMP_SUFFIX
+        from vive_correct.data.dataset import VIDEO_SUFFIX, TIMESTAMP_SUFFIX
         from vive_correct.estimate.geometry import VIDEO_KEY
         from vive_correct.run_dataset import main
 

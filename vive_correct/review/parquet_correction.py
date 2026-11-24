@@ -2,11 +2,11 @@
 
 import numpy as np
 import pyarrow as pa
-from pathlib import Path
 from scipy.spatial.transform import Rotation
 
 from vive_correct.batch.hand_overlay import JOINTS
-from vive_correct.source_data import FILES
+from vive_correct.data.layout import data_directory
+from vive_correct.data.source_data import FILES
 
 
 def position_groups(name: str):
@@ -68,7 +68,6 @@ def rigid_correct(table, name, alignment):
     """Transform source poses and world landmarks once, preserving incomplete groups."""
     from ego_data.tracking_sync import resample_tracking
     from ego_data.vive_origin_alignment import pose_stream
-    from vive_correct.source_data import DATA
 
     sequence, degrees = alignment["pose_euler_sequence"], alignment["pose_degrees"]
     counts, poses = {}, {}
@@ -100,7 +99,7 @@ def rigid_correct(table, name, alignment):
                 if "timestamp" not in table.column_names:
                     raise ValueError(f"{name}: 缺少 timestamp")
                 stream = pose_stream(
-                    Path(alignment["episode"]) / DATA / f"observation.{side}_wrist_pose.parquet"
+                    data_directory(alignment["episode"]) / f"observation.{side}_wrist_pose.parquet"
                 )
                 poses[side] = resample_tracking(
                     stream,

@@ -32,10 +32,12 @@ CHAINS = [[0, 1, 2, 3, 4]] + [[0, i, i + 1, i + 2, i + 3, i + 4] for i in (5, 10
 
 
 def rgb_source(episode):
+    from vive_correct.data.layout import timestamp_file, video_file
+
     episode = Path(episode)
     for key in RGB_KEYS:
-        timestamps = episode / "data/chunk-000/episode_000000" / f"{key}.parquet"
-        video = episode / "videos/chunk-000" / key / "episode_000000.mp4"
+        timestamps = timestamp_file(episode, key)
+        video = video_file(episode, key)
         if timestamps.is_file() and video.is_file():
             return timestamps, video
     raise ValueError("No supported RGB video with timestamps")
@@ -49,7 +51,9 @@ def export(episode, output, *, selected=None, start=0, end=None, labels=False, s
     wanted = set(selected) if selected else set(range(start, end + 1))
     if not wanted or min(wanted) < 0 or max(wanted) >= len(times):
         raise ValueError("Requested RGB frames outside stream")
-    source = episode / "data/chunk-000/episode_000000/observation.hand_skeleton.parquet"
+    from vive_correct.data.layout import data_directory
+
+    source = data_directory(episode) / "observation.hand_skeleton.parquet"
     raw = pq.read_table(source)
     (hand_times, points), diagnostics = normalize_tracking(
         (
@@ -123,9 +127,12 @@ def export(episode, output, *, selected=None, start=0, end=None, labels=False, s
 
 
 def depth_available(episode):
+    from vive_correct.estimate.geometry import VIDEO_KEY
+    from vive_correct.data.layout import annotation_dir, timestamp_file, video_file
+
     episode = Path(episode)
     key = "observation.images.depth_headband_left_rectified"
-    ann = episode / "annotation/chunk-000" / key / "episode_000000"
+    ann = annotation_dir(episode, key)
     try:
         meta = metadata_path(ann)
     except FileNotFoundError:
@@ -133,10 +140,9 @@ def depth_available(episode):
     required = [
         meta,
         ann / "valid_mask_ffv1.mkv",
-        episode / "videos/chunk-000" / key / "episode_000000.mp4",
-        episode
-        / "videos/chunk-000/observation.images.headband_left_rgb_rectified/episode_000000.mp4",
-        episode / "data/chunk-000/episode_000000" / f"{key}.parquet",
+        video_file(episode, key),
+        video_file(episode, VIDEO_KEY),
+        timestamp_file(episode, key),
     ]
     return all(path.is_file() for path in required)
 

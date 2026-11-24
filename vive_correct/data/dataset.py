@@ -7,33 +7,66 @@ from pathlib import Path
 
 from vive_correct.batch.report_io import digest
 from vive_correct.config import run_settings
-from vive_correct.estimate.geometry import VIDEO_KEY
+from vive_correct.data.layout import (
+    CALIBRATION_SUFFIX,
+    TIMESTAMP_SUFFIX,
+    VIDEO_SUFFIX,
+    calibration_file,
+    dataset_root,
+    is_indexed_episode,
+    iter_dataset_dirs,
+    timestamp_file,
+    video_dir,
+    video_file,
+)
 
-VIDEO_SUFFIX = Path("videos/chunk-000") / VIDEO_KEY / "episode_000000.mp4"
-TIMESTAMP_SUFFIX = Path("data/chunk-000/episode_000000") / f"{VIDEO_KEY}.parquet"
+__all__ = ["VIDEO_SUFFIX", "TIMESTAMP_SUFFIX", "discover", "input_signature", "select_episodes"]
 
 
 def discover(dataset):
-    """Include incomplete episodes so missing videos are reported, not hidden."""
-    episodes = {
-        p.parents[3]
-        for p in dataset.rglob(f"{VIDEO_KEY}/episode_000000.mp4")
-        if p.relative_to(p.parents[3]) == VIDEO_SUFFIX
-    }
-    episodes.update(p.parent.parent for p in dataset.rglob("calibrations/rectify_params.yaml"))
+    """Include incomplete episodes so missing videos are reported, not hidden.
+
+    A folder that contains episode_000000 only is one episode, rooted at that
+    folder. A folder that contains episode_000000 and episode_000001 is a
+    LeRobot dataset: each data/chunk-000/episode_* directory is one episode.
+    """
+    dataset = Path(dataset)
+    episodes = set()
+    multi_roots = set()
+    for root in iter_dataset_dirs(dataset):
+        videos = video_dir(root)
+        data_root = root / "data/chunk-000"
+        stems = sorted(p.stem for p in videos.glob("episode_*.mp4")) if videos else []
+        data_names = (
+            sorted(p.name for p in data_root.glob("episode_*") if p.is_dir())
+            if data_root.is_dir()
+            else []
+        )
+        if len(stems) > 1 or len(data_names) > 1:
+            multi_roots.add(root.resolve())
+            for name in sorted(set(stems) | set(data_names)):
+                episodes.add(data_root / name)
+        elif stems or data_names:
+            episodes.add(root)
+    for root in iter_dataset_dirs(dataset):
+        if (root / CALIBRATION_SUFFIX).is_file() and root.resolve() not in multi_roots:
+            episodes.add(root)
     return sorted(episodes)
 
 
 def input_signature(episode):
-    files = (VIDEO_SUFFIX, TIMESTAMP_SUFFIX, Path("calibrations/rectify_params.yaml"))
+    """Stable keys match the legacy relative paths for a single-episode folder."""
+    root = dataset_root(episode)
+    files = (video_file(episode), timestamp_file(episode), calibration_file(episode))
+    legacy = (VIDEO_SUFFIX, TIMESTAMP_SUFFIX, CALIBRATION_SUFFIX)
     result = {}
-    for relative in files:
-        path = episode / relative
+    for path, relative in zip(files, legacy):
+        key = str(relative) if not is_indexed_episode(episode) else str(path.relative_to(root))
         if path.is_file():
             stat = path.stat()
-            result[str(relative)] = [stat.st_size, stat.st_mtime_ns]
+            result[key] = [stat.st_size, stat.st_mtime_ns]
         else:
-            result[str(relative)] = None
+            result[key] = None
     return result
 
 
@@ -55,7 +88,7 @@ def select_episodes(dataset, episodes_file=None):
 
 
 def source_hashes():
-    package = Path(__file__).resolve().parent
+    package = Path(__file__).resolve().parents[1]
     files = sorted(package.rglob("*.py")) + sorted((package / "config").glob("*.yaml"))
     return {str(p.relative_to(package)): digest(p) for p in files}
 

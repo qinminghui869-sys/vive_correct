@@ -3,7 +3,7 @@
 import fcntl
 from pathlib import Path
 
-from vive_correct.review_io import read_json
+from vive_correct.review.review_io import read_json
 
 
 def scan_running(output):

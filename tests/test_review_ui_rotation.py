@@ -29,7 +29,9 @@ class BrowserRotationTests(unittest.TestCase):
         cases.extend(
             dict(angles=[25, 0, 0], steps=[[1, angle], [0, 5], [2, -10]]) for angle in (-90, 90)
         )
-        script = Path(__file__).resolve().parents[1] / "vive_correct/review_ui/axis_rotation.js"
+        script = (
+            Path(__file__).resolve().parents[1] / "vive_correct/review/review_ui/axis_rotation.js"
+        )
         result = subprocess.run(
             [
                 "node",

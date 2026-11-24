@@ -17,20 +17,20 @@ import pyarrow.parquet as pq
 import yaml
 
 from ego_data.vive_origin_alignment import build_alignment
-from vive_correct.dataset import TIMESTAMP_SUFFIX, VIDEO_SUFFIX
+from vive_correct.data.dataset import TIMESTAMP_SUFFIX, VIDEO_SUFFIX
 from vive_correct.estimate.geometry import VIDEO_KEY
-from vive_correct.human_review import ReviewStore
-from vive_correct.review_io import atomic_json, output_lock, read_json
-from vive_correct.review_repair import (
+from vive_correct.review.human_review import ReviewStore
+from vive_correct.review.review_io import atomic_json, output_lock, read_json
+from vive_correct.review.review_repair import (
     DATA,
     repair_dataset,
     write_corrected_wrists,
 )
-from vive_correct.review_repair import (
+from vive_correct.review.review_repair import (
     main as repair_main,
 )
-from vive_correct.review_server import DEFAULT_PORT, ReviewServer
-from vive_correct.review_server import main as server_main
+from vive_correct.review.review_server import DEFAULT_PORT, ReviewServer
+from vive_correct.review.review_server import main as server_main
 
 
 def make_fixture(root):
@@ -143,7 +143,7 @@ def approve(store):
     state["reviewer"] = "synthetic-test"
     for side, item in state["selected"].items():
         item.update(status="accepted", physical_side=side)
-    from vive_correct.review_bundle import approve as approve_bundle
+    from vive_correct.review.review_bundle import approve as approve_bundle
 
     approve_bundle(store, 0, state, Path(store.load(0)["episode"]).parent / "mount.json")
     return store.load(0)
@@ -316,7 +316,7 @@ class ReviewTests(unittest.TestCase):
             for s in ("left", "right")
         }
         with (
-            patch("vive_correct.rerun_export.subprocess.run", side_effect=self.fake_render),
+            patch("vive_correct.export.rerun_export.subprocess.run", side_effect=self.fake_render),
             patch(
                 "ego_data.vive_origin_alignment.build_alignment",
                 side_effect=AssertionError("RRD must reuse alignment"),
@@ -350,13 +350,13 @@ class ReviewTests(unittest.TestCase):
                 )
 
     def test_pending_not_exported_and_render_failure_not_published(self):
-        with patch("vive_correct.review_repair.export_recordings") as export:
+        with patch("vive_correct.review.review_repair.export_recordings") as export:
             result = repair_dataset(self.output, self.mount)
             export.assert_not_called()
             self.assertEqual(result["entries"][0]["status"], "pending")
         approve(self.store)
         with patch(
-            "vive_correct.rerun_export.subprocess.run", side_effect=OSError("render failed")
+            "vive_correct.export.rerun_export.subprocess.run", side_effect=OSError("render failed")
         ):
             result = repair_dataset(self.output, self.mount)
         self.assertEqual(result["entries"][0]["status"], "failed")
@@ -373,35 +373,35 @@ class ReviewTests(unittest.TestCase):
             state["reviewer"] = "synthetic-test"
             for side, item in state["selected"].items():
                 item.update(status="accepted", physical_side=side)
-            from vive_correct.review_bundle import approve as approve_bundle
+            from vive_correct.review.review_bundle import approve as approve_bundle
 
             approve_bundle(store, index, state, self.mount)
         # Tracking failure affects one episode, without changing its reviewed video.
         (self.episode / DATA / "observation.left_wrist_pose.parquet").unlink()
-        with patch("vive_correct.rerun_export.subprocess.run", side_effect=self.fake_render):
+        with patch("vive_correct.export.rerun_export.subprocess.run", side_effect=self.fake_render):
             result = repair_dataset(self.output, self.mount)
         self.assertEqual([r["status"] for r in result["entries"]], ["failed", "complete"])
         self.assertEqual(len(read_json(self.output / "rerun/manifest.json")["entries"]), 1)
 
     def test_changed_review_blocks_standalone_rrd_reexport(self):
-        from vive_correct.rerun_export import export_recordings
+        from vive_correct.export.rerun_export import export_recordings
 
         state = approve(self.store)
-        with patch("vive_correct.rerun_export.subprocess.run", side_effect=self.fake_render):
+        with patch("vive_correct.export.rerun_export.subprocess.run", side_effect=self.fake_render):
             result = repair_dataset(self.output, self.mount)
         state["selected"]["left"]["status"] = "rejected"
         self.store.save(0, state)
-        with patch("vive_correct.rerun_export.subprocess.run") as render:
+        with patch("vive_correct.export.rerun_export.subprocess.run") as render:
             self.assertEqual(export_recordings(Path(result["entries"][0]["run"]), self.mount), 1)
             render.assert_not_called()
 
     def test_cached_export_skips_renderer_and_invalidates_changed_inputs(self):
         state = approve(self.store)
         with patch(
-            "vive_correct.rerun_export.subprocess.run", side_effect=self.fake_render
+            "vive_correct.export.rerun_export.subprocess.run", side_effect=self.fake_render
         ) as render:
             first = repair_dataset(self.output, self.mount)
-            with patch("vive_correct.human_review.checked_pose") as pose:
+            with patch("vive_correct.review.human_review.checked_pose") as pose:
                 unchanged = self.store.save(0, self.store.load(0))
                 pose.assert_not_called()
             self.assertEqual(state["revision"], unchanged["revision"])
@@ -409,7 +409,7 @@ class ReviewTests(unittest.TestCase):
             self.assertTrue(second["entries"][0]["reused"])
             self.assertEqual(first["entries"][0]["recording"], second["entries"][0]["recording"])
             self.assertEqual(render.call_count, 1)
-            from vive_correct.viewer import recordings_at
+            from vive_correct.export.viewer import recordings_at
 
             self.assertEqual(
                 recordings_at(second["entries"][0]["run"]), [Path(first["entries"][0]["recording"])]
@@ -455,13 +455,15 @@ class ReviewTests(unittest.TestCase):
             payload["reviewer"] = "test"
             for side, choice in payload["selected"].items():
                 choice.update(status="accepted", physical_side=side)
-            from vive_correct.review_bundle import approve as approve_bundle
+            from vive_correct.review.review_bundle import approve as approve_bundle
 
             approve_bundle(store, i, payload, self.mount)
-        with patch("vive_correct.rerun_export.subprocess.run", side_effect=self.fake_render):
+        with patch("vive_correct.export.rerun_export.subprocess.run", side_effect=self.fake_render):
             repair_dataset(self.output, self.mount, indices=[1])
         original = read_json(self.output / "rerun/manifest.json")["entries"]
-        with patch("vive_correct.rerun_export.subprocess.run", side_effect=OSError("test failure")):
+        with patch(
+            "vive_correct.export.rerun_export.subprocess.run", side_effect=OSError("test failure")
+        ):
             result = repair_dataset(self.output, self.mount, indices=[0])
         self.assertEqual(result["entries"][0]["status"], "failed")
         self.assertEqual(read_json(self.output / "rerun/manifest.json")["entries"], original)
@@ -472,7 +474,7 @@ class ServerTests(unittest.TestCase):
     setUp = ReviewTests.setUp
 
     def test_split_approval_does_not_render_and_old_endpoint_is_gone(self):
-        from vive_correct.review_bundle import review_state
+        from vive_correct.review.review_bundle import review_state
 
         server = ReviewServer(self.output, 0, self.mount)
         self.addCleanup(server.server_close)
@@ -490,7 +492,7 @@ class ServerTests(unittest.TestCase):
         payload["reviewer"] = "test"
         for side, item in payload["selected"].items():
             item.update(status="accepted", physical_side=side)
-        with patch("vive_correct.review_server.export_approved") as export:
+        with patch("vive_correct.review.review_server.export_approved") as export:
             started = perf_counter()
             connection.request("POST", "/api/approve?id=0", json.dumps(payload), headers)
             response = connection.getresponse()
@@ -504,7 +506,7 @@ class ServerTests(unittest.TestCase):
         self.assertFalse(list(self.output.rglob("*.rrd")))
 
     def test_approval_jobs_are_independent_and_bounded(self):
-        from vive_correct.review_bundle import approve as approve_bundle
+        from vive_correct.review.review_bundle import approve as approve_bundle
 
         for name in ("second", "third"):
             _, other, _ = make_fixture(self.root / name)
@@ -532,7 +534,7 @@ class ServerTests(unittest.TestCase):
                 item.update(status="accepted", physical_side=side)
             return state
 
-        with patch("vive_correct.review_server.approve", side_effect=slow_approve):
+        with patch("vive_correct.review.review_server.approve", side_effect=slow_approve):
             try:
                 server.start_job(0, "approve", payload(0))
                 self.assertTrue(entered[0].wait(2))
@@ -549,7 +551,7 @@ class ServerTests(unittest.TestCase):
         self.assertEqual([server.jobs[i]["status"] for i in range(3)], ["approved"] * 3)
 
     def test_export_does_not_block_another_episode_review(self):
-        from vive_correct.review_bundle import approve as approve_bundle
+        from vive_correct.review.review_bundle import approve as approve_bundle
 
         _, other, _ = make_fixture(self.root / "second")
         atomic_json(
@@ -579,8 +581,8 @@ class ServerTests(unittest.TestCase):
             return result
 
         with (
-            patch("vive_correct.review_server.export_approved", side_effect=export),
-            patch("vive_correct.review_server.approve", side_effect=second_approve),
+            patch("vive_correct.review.review_server.export_approved", side_effect=export),
+            patch("vive_correct.review.review_server.approve", side_effect=second_approve),
         ):
             try:
                 server.start_job(0, "export")
@@ -662,7 +664,7 @@ class ServerTests(unittest.TestCase):
         self.assertEqual(response.status, 200)
         self.assertFalse(json.loads(response.read())["approved"])
         with patch(
-            "vive_correct.review_server.ReviewServer", side_effect=OSError("Address in use")
+            "vive_correct.review.review_server.ReviewServer", side_effect=OSError("Address in use")
         ):
             with self.assertRaises(SystemExit) as error:
                 server_main(["--out", str(self.output), "--port", "18765"])

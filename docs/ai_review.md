@@ -4,15 +4,15 @@ AI 预审默认关闭。它只检查 OpenCV 最终选中的结果，不遍历候
 
 ## 启用
 
-在 [CV 选帧](cv_detection.md) 命令后加 `--ai-final-review`。默认 `transport=api`，模型、地址和密钥读 `vive_correct/openai.local.json`。格式见 [示例](../vive_correct/openai.example.json)，当前示例模型为 `qwen3.8-max`。`--model-config` 可改用其他 JSON。
+在 [CV 选帧](cv_detection.md) 命令后加 `--ai-final-review`。默认 `transport=api`。模型、地址和密钥读 `vive_correct/openai.local.json`，该文件优先于环境变量。格式见 [示例](../vive_correct/openai.example.json)，当前示例模型为 `qwen3.8-max`。`--model`、`--api-key` 或 `--model-config` 可覆盖它。
 
 Codex 通道显式加 `--transport codex`。模型名来自 [run.yaml](../vive_correct/config/run.yaml)，可用 `--codex-model` 覆盖。
 
 ```bash
-bash scripts/run_cv.sh <dataset> outputs/ai_review \
+bash scripts/run_cv.sh /mnt/nas/synnas/脑电/KS3 outputs/ks3 \
   --ai-final-review --model-jobs 2
 
-python3 -m vive_correct review --out outputs/ai_review
+python3 -m vive_correct review --out outputs/ks3
 ```
 
 `--jobs` 是 OpenCV 并发，`--model-jobs` 是 AI 并发，`--model-timeout` 是单次超时。一条选帧发布后就可以审核；选帧进程会等已排队的 AI 结束。`--dry-run` 不调用模型。

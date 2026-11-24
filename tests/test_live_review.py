@@ -18,15 +18,15 @@ from unittest.mock import patch
 import numpy as np
 
 from test_human_review import make_fixture
-from vive_correct.cv_features import run_feature_dataset
+from vive_correct.cv.cv_features import run_feature_dataset
 from vive_correct.estimate.cv_config import CVConfig
-from vive_correct.feature_progress import scan_progress
-from vive_correct.human_review import ReviewStore, decode_frame
-from vive_correct.review_io import atomic_json, output_lock, read_json
-from vive_correct.review_server import ReviewServer
-from vive_correct.review_repair import repair_dataset
-from vive_correct.runtime_cache import CACHE, MemoryCache, cached_file
-from vive_correct.task_locks import operation_lock
+from vive_correct.cv.feature_progress import scan_progress
+from vive_correct.review.human_review import ReviewStore, decode_frame
+from vive_correct.review.review_io import atomic_json, output_lock, read_json
+from vive_correct.review.review_server import ReviewServer
+from vive_correct.review.review_repair import repair_dataset
+from vive_correct.runtime.runtime_cache import CACHE, MemoryCache, cached_file
+from vive_correct.runtime.task_locks import operation_lock
 
 
 class LiveReviewTests(unittest.TestCase):
@@ -86,11 +86,11 @@ class LiveReviewTests(unittest.TestCase):
 
     def test_frame_encoding_is_shared_and_invalidated(self):
         import cv2
-        from vive_correct.dataset import VIDEO_SUFFIX
+        from vive_correct.data.dataset import VIDEO_SUFFIX
 
         self.publish("sample")
         server = self.server()
-        with patch("vive_correct.review_server.cv2.imencode", wraps=cv2.imencode) as encode:
+        with patch("vive_correct.review.review_server.cv2.imencode", wraps=cv2.imencode) as encode:
             with ThreadPoolExecutor(4) as pool:
                 frames = list(pool.map(lambda _: server.frame_png(0, 0), range(4)))
             self.assertEqual(encode.call_count, 1)
@@ -100,7 +100,7 @@ class LiveReviewTests(unittest.TestCase):
             self.assertEqual(encode.call_count, 2)
 
     def test_preview_concurrency_limit_and_cache_hit_bypass(self):
-        from vive_correct.review_server import preview as calculate
+        from vive_correct.review.review_server import preview as calculate
 
         self.publish("sample")
         server = ReviewServer(self.output, 0, self.mount, preview_jobs=2)
@@ -116,7 +116,7 @@ class LiveReviewTests(unittest.TestCase):
             self.assertTrue(release.wait(5))
             return calculate(*args)
 
-        with patch("vive_correct.review_server.preview", side_effect=blocked):
+        with patch("vive_correct.review.review_server.preview", side_effect=blocked):
             with ThreadPoolExecutor(3) as pool:
                 first = pool.submit(server.axis_preview, 0, right)
                 second = pool.submit(server.axis_preview, 0, dict(right, frame_index=2))
@@ -199,14 +199,16 @@ class LiveReviewTests(unittest.TestCase):
         else:
             self.fail("publication did not appear within 2s")
         with patch(
-            "vive_correct.review_server.review_state", side_effect=AssertionError("heavy poll")
+            "vive_correct.review.review_server.review_state",
+            side_effect=AssertionError("heavy poll"),
         ):
             rows = get("/api/episodes")
             self.assertEqual(len(rows), 1)
         state = get("/api/episode?id=0")
         self.assertEqual(state["frame_count"], 4)
         with patch(
-            "vive_correct.review_server.review_state", side_effect=AssertionError("heavy poll")
+            "vive_correct.review.review_server.review_state",
+            side_effect=AssertionError("heavy poll"),
         ):
             self.assertEqual(get("/api/review-state?id=0")["revision"], state["revision"])
 
@@ -225,8 +227,8 @@ class LiveReviewTests(unittest.TestCase):
             approved.set()
 
         with (
-            patch("vive_correct.review_server.export_approved", side_effect=export),
-            patch("vive_correct.review_server.approve", side_effect=approve),
+            patch("vive_correct.review.review_server.export_approved", side_effect=export),
+            patch("vive_correct.review.review_server.approve", side_effect=approve),
         ):
             try:
                 server.start_job(0, "export")
@@ -236,7 +238,7 @@ class LiveReviewTests(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError, "正在处理"):
                     server.save_review(1, server.store.load(1))
                 # A separate process cannot mutate a queued browser episode.
-                code = "from vive_correct.task_locks import operation_lock\nimport sys\nwith operation_lock(sys.argv[1]): pass"
+                code = "from vive_correct.runtime.task_locks import operation_lock\nimport sys\nwith operation_lock(sys.argv[1]): pass"
                 result = subprocess.run(
                     [sys.executable, "-c", code, str(server.store.path(1).parent)],
                     capture_output=True,
@@ -282,7 +284,7 @@ class LiveReviewTests(unittest.TestCase):
                 with guard:
                     active -= 1
 
-        with patch("vive_correct.review_actions.export_approved", side_effect=export):
+        with patch("vive_correct.review.review_actions.export_approved", side_effect=export):
             result = repair_dataset(self.output, self.mount, export_jobs=2)
         self.assertEqual(peak, 2)
         self.assertEqual(
@@ -290,7 +292,8 @@ class LiveReviewTests(unittest.TestCase):
         )
         store.path(1).unlink()
         with patch(
-            "vive_correct.review_actions.export_approved", return_value=dict(status="complete")
+            "vive_correct.review.review_actions.export_approved",
+            return_value=dict(status="complete"),
         ):
             result = repair_dataset(self.output, self.mount, export_jobs=2)
         self.assertEqual(
@@ -303,7 +306,7 @@ class LiveReviewTests(unittest.TestCase):
             path.with_name("review_job.json"),
             dict(index=0, kind="export", status="rendering", running=True),
         )
-        with patch("vive_correct.review_server.export_approved") as export:
+        with patch("vive_correct.review.review_server.export_approved") as export:
             server = self.server()
             self.assertEqual(server.jobs[0]["status"], "interrupted")
             self.assertFalse(server.jobs[0]["running"])
@@ -360,10 +363,10 @@ class LiveReviewTests(unittest.TestCase):
             return report
 
         with (
-            patch("vive_correct.cv_features.select_episodes", return_value=[self.episode]),
-            patch("vive_correct.cv_features.ProcessPoolExecutor", ThreadPoolExecutor),
-            patch("vive_correct.cv_features.render_features"),
-            patch("vive_correct.cv_features._scan_published", side_effect=worker) as scan,
+            patch("vive_correct.cv.cv_features.select_episodes", return_value=[self.episode]),
+            patch("vive_correct.cv.cv_features.ProcessPoolExecutor", ThreadPoolExecutor),
+            patch("vive_correct.cv.cv_features.render_features"),
+            patch("vive_correct.cv.cv_features._scan_published", side_effect=worker) as scan,
         ):
             self.assertEqual(run_feature_dataset(args, self.root, self.output, CVConfig.load()), 0)
             self.assertEqual(scan.call_count, 1)
@@ -404,10 +407,12 @@ class LiveReviewTests(unittest.TestCase):
             return report
 
         with (
-            patch("vive_correct.cv_features.select_episodes", return_value=[self.episode, second]),
-            patch("vive_correct.cv_features.ProcessPoolExecutor", ThreadPoolExecutor),
-            patch("vive_correct.cv_features._scan_published", side_effect=worker),
-            patch("vive_correct.cv_features.render_features"),
+            patch(
+                "vive_correct.cv.cv_features.select_episodes", return_value=[self.episode, second]
+            ),
+            patch("vive_correct.cv.cv_features.ProcessPoolExecutor", ThreadPoolExecutor),
+            patch("vive_correct.cv.cv_features._scan_published", side_effect=worker),
+            patch("vive_correct.cv.cv_features.render_features"),
         ):
             self.assertEqual(run_feature_dataset(args, self.root, self.output, CVConfig.load()), 1)
         progress = scan_progress(self.output)
@@ -442,7 +447,7 @@ class CacheTests(unittest.TestCase):
             CACHE.clear()
             cold, count = decode_frame(episode, 1)
             with patch(
-                "vive_correct.human_review._decode_frame",
+                "vive_correct.review.human_review._decode_frame",
                 side_effect=AssertionError("decoded twice"),
             ):
                 warm, warm_count = decode_frame(episode, 1)

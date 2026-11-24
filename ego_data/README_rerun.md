@@ -23,7 +23,7 @@ python3 -m vive_correct view /path/to/recording.rrd
 
 ### 深度元数据
 
-目录：`annotation/chunk-000/observation.images.depth_headband_left_rectified/episode_000000/`。以下两种文件名由渲染、深度精修和手动调腕部共用；同时存在时优先第一种：
+目录：`annotation/chunk-000/observation.images.depth_headband_left_rectified/<episode>/`。单条旧数据的 `<episode>` 是 `episode_000000`；多条数据集使用对应编号。以下两种文件名由渲染、深度精修和手动调腕部共用；同时存在时优先第一种：
 
 1. `episode_000000_meta.json`
 2. `fast_foundation_stereo_video_meta.json`

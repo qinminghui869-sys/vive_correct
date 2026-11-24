@@ -18,10 +18,10 @@ bash scripts/run_cv.sh /path/to/dataset outputs/cv_tracked \
   --stage all --feature-search full --jobs 4
 ```
 
-清单必须是非空 JSON 数组，路径相对本次数据集根目录填写，例如：
+清单必须是非空 JSON 数组，路径相对本次数据集根目录填写。单条旧数据写样本目录；KS3 写该条的数据目录，例如：
 
 ```json
-["dining/episode-a", "stove/episode-b"]
+["desk/episode-a", "dining-task/data/chunk-000/episode_000003"]
 ```
 
 省略 `--episodes-file` 处理全部样本；加 `--dry-run` 只预览计划。`--max-frames 120` 将视频限制为前 120 帧，仅适合短片冒烟测试，区别于快速模式在全时段内最多检测 120 帧。
@@ -94,16 +94,16 @@ feature_fast_timeout_s: 30.0
 已有候选池可在输入签名一致时收紧门槛重筛：
 
 ```bash
-python3 -m vive_correct.cv_features --source outputs/cv \
+python3 -m vive_correct.cv.cv_features --source outputs/cv \
   --out outputs/cv_refiltered --no-rescan-missing --jobs 4
 ```
 
 离线评估：
 
 ```bash
-python3 -m vive_correct.cv_evaluation prepare \
+python3 -m vive_correct.cv.cv_evaluation prepare \
   --dataset /path/to/dataset --out outputs/cv_evaluation
-python3 -m vive_correct.cv_evaluation score --dataset /path/to/dataset \
+python3 -m vive_correct.cv.cv_evaluation score --dataset /path/to/dataset \
   --annotations outputs/cv_evaluation/annotations.json \
   --results outputs/cv/batch/delivery/summary.json \
   --out outputs/cv_evaluation/scored

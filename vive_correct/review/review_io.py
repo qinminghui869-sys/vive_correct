@@ -61,7 +61,7 @@ def output_lock(output, *, name=".human_review.lock", blocking=False):
 
 
 def export_code_signature():
-    root = Path(__file__).resolve().parent.parent
+    root = Path(__file__).resolve().parents[2]
     files = sorted((root / "vive_correct").rglob("*.py")) + sorted((root / "ego_data").glob("*.py"))
     return hashlib.sha256("".join(digest(path) for path in files).encode()).hexdigest()
 

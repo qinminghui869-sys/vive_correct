@@ -5,7 +5,7 @@ import json
 from os.path import relpath
 from pathlib import Path
 
-from vive_correct.dataset import make_run_plan, check_run_plan
+from vive_correct.data.dataset import make_run_plan, check_run_plan
 from vive_correct.batch.report_io import write_json
 
 
@@ -27,7 +27,7 @@ def run_cv_dataset(args, dataset, output, selection, initial_mount, detector_con
     render_cv_delivery(output, entries, detector_config.report())
     status = int(any(e["status"] in ("failed", "missing_input") for e in entries))
     if args.stage == "all":
-        from vive_correct.cv_features import run_feature_dataset
+        from vive_correct.cv.cv_features import run_feature_dataset
 
         status = max(status, run_feature_dataset(args, dataset, output, detector_config))
     return status

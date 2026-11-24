@@ -1,7 +1,7 @@
 """Prepare video-disjoint CV evaluation and score explicitly reviewed annotations.
 
-python -m vive_correct.cv_evaluation prepare --dataset samples --out outputs/cv_eval
-python -m vive_correct.cv_evaluation score --dataset samples --annotations FILE --out DIR
+python -m vive_correct.cv.cv_evaluation prepare --dataset samples --out outputs/cv_eval
+python -m vive_correct.cv.cv_evaluation score --dataset samples --annotations FILE --out DIR
 """
 
 import argparse
@@ -14,7 +14,8 @@ import time
 import cv2
 import numpy as np
 
-from vive_correct.dataset import select_episodes, VIDEO_SUFFIX
+from vive_correct.data.dataset import select_episodes
+from vive_correct.data.layout import video_file
 from vive_correct.batch.report_io import write_json
 from vive_correct.estimate.cv_config import CVConfig
 from vive_correct.estimate.label_detection import detect_labels, quad_iou
@@ -33,7 +34,7 @@ def prepare(dataset, output):
             relative = episode.relative_to(dataset).as_posix()
             split = "tuning" if index < split_at else "holdout"
             splits[relative] = split
-            capture = cv2.VideoCapture(str(episode / VIDEO_SUFFIX))
+            capture = cv2.VideoCapture(str(video_file(episode)))
             try:
                 count = int(capture.get(cv2.CAP_PROP_FRAME_COUNT))
             finally:
@@ -62,7 +63,7 @@ def score_frames(dataset, annotations, detector, config=None):
         episode = (dataset / row["episode"]).resolve()
         if not episode.is_relative_to(dataset.resolve()):
             raise ValueError("Annotation episode escapes dataset")
-        capture = cv2.VideoCapture(str(episode / VIDEO_SUFFIX))
+        capture = cv2.VideoCapture(str(video_file(episode)))
         try:
             capture.set(cv2.CAP_PROP_POS_FRAMES, row["frame_index"])
             ok, image = capture.read()

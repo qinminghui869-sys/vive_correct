@@ -14,6 +14,7 @@ from ego_data.tracking_sync import resample_tracking
 from ego_data.vive_origin_alignment import pose_stream
 from vive_correct.batch.hand_overlay import JOINTS, CHAINS
 from vive_correct.estimate.geometry import VIDEO_KEY
+from vive_correct.data.layout import data_directory, video_file
 
 
 def export_corrected_rgb(
@@ -31,13 +32,13 @@ def export_corrected_rgb(
     alignment = json.loads(Path(alignment_path).read_text())
     if Path(alignment["episode"]).resolve() != episode.resolve():
         raise ValueError("Alignment belongs to another episode")
-    data = episode / "data/chunk-000/episode_000000"
+    data = data_directory(episode)
     times = pq.read_table(data / f"{VIDEO_KEY}.parquet")["timestamp"].to_numpy()
     end = len(times) - 1 if end is None else end
     wanted = set(selected) if selected else set(range(start, end + 1))
     if not wanted or min(wanted) < 0 or max(wanted) >= len(times):
         raise ValueError("Requested frames outside rectified RGB stream")
-    from vive_correct.source_data import original_path
+    from vive_correct.data.source_data import original_path
 
     wrists, hands, offsets, corrected_wrists, original_hands = {}, {}, {}, {}, {}
     corrected_rotations = {}
@@ -108,9 +109,7 @@ def export_corrected_rgb(
     )
     seen, invalid = [], {s: [] for s in wrists}
     try:
-        with av.open(
-            str(episode / "videos/chunk-000" / VIDEO_KEY / "episode_000000.mp4")
-        ) as container:
+        with av.open(str(video_file(episode))) as container:
             for index, frame in enumerate(container.decode(video=0)):
                 if index > max(wanted):
                     break

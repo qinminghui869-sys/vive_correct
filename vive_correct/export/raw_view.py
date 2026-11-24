@@ -8,8 +8,9 @@ import sys
 
 import pyarrow.parquet as pq
 
-from vive_correct.rerun_export import ROOT, DEFAULT_MOUNT, DEPTH_KEY, check_dependencies
-from vive_correct.viewer import launch
+from vive_correct.export.rerun_export import ROOT, DEFAULT_MOUNT, DEPTH_KEY, check_dependencies
+from vive_correct.data.layout import timestamp_file
+from vive_correct.export.viewer import launch
 
 
 def main(argv=None):
@@ -40,7 +41,7 @@ def main(argv=None):
     if output == episode or episode in output.parents or output in episode.parents:
         parser.error("Output must be separate from the dataset")
     check_dependencies(args.open_rerun)
-    timestamp_path = episode / "data/chunk-000/episode_000000" / f"{DEPTH_KEY}.parquet"
+    timestamp_path = timestamp_file(episode, DEPTH_KEY)
     from ego_data.manus_view import depth_available, rgb_source
 
     if args.rgb_only or not depth_available(episode):
@@ -52,7 +53,7 @@ def main(argv=None):
     output.mkdir(parents=True, exist_ok=True)
     hands = None
     if args.repair_hands:
-        from vive_correct.hand_repair import prepare_hands
+        from vive_correct.export.hand_repair import prepare_hands
 
         hands, hand_status = prepare_hands(episode, output / "hands")
         (output / "hand_status.json").write_text(json.dumps(hand_status, indent=2) + "\n")

@@ -5,7 +5,7 @@ from tempfile import TemporaryDirectory
 import unittest
 from unittest.mock import Mock, patch
 
-from vive_correct.viewer import launch, recordings_at
+from vive_correct.export.viewer import launch, recordings_at
 
 
 class ViewerTests(unittest.TestCase):
@@ -45,9 +45,9 @@ class ViewerTests(unittest.TestCase):
             process = Mock(pid=123)
             process.wait.side_effect = subprocess.TimeoutExpired("rerun", 2)
             with (
-                patch("vive_correct.viewer.shutil.which", return_value="/bin/rerun"),
-                patch("vive_correct.viewer.sys.platform", "linux"),
-                patch("vive_correct.viewer.subprocess.Popen", return_value=process) as popen,
+                patch("vive_correct.export.viewer.shutil.which", return_value="/bin/rerun"),
+                patch("vive_correct.export.viewer.sys.platform", "linux"),
+                patch("vive_correct.export.viewer.subprocess.Popen", return_value=process) as popen,
             ):
                 launch([root / "recording.rrd"])
             self.assertIn("vulkan", popen.call_args.args[0])
@@ -58,8 +58,8 @@ class ViewerTests(unittest.TestCase):
             process = Mock()
             process.wait.return_value = 1
             with (
-                patch("vive_correct.viewer.shutil.which", return_value="/bin/rerun"),
-                patch("vive_correct.viewer.subprocess.Popen", return_value=process),
+                patch("vive_correct.export.viewer.shutil.which", return_value="/bin/rerun"),
+                patch("vive_correct.export.viewer.subprocess.Popen", return_value=process),
             ):
                 with self.assertRaisesRegex(ValueError, "exited during startup"):
                     launch([Path(temporary) / "recording.rrd"])

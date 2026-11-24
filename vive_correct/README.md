@@ -4,7 +4,9 @@
 
 ## 输入要求
 
-纯 CV 选帧只需要矫正左目视频。进入几何审核还需要时间戳和标定：
+默认数据集为 `/mnt/nas/synnas/脑电/KS3`，可用 `--dataset` 指定其他目录。输出默认写入 `outputs/ks3`。输入应包含矫正后的头带左目视频；眼部或头部其他相机不能直接替代。
+
+单条旧数据仍按原来的目录读取。一条里只有 `episode_000000` 时，样本根目录就是这条数据：
 
 ```text
 <episode>/
@@ -13,7 +15,20 @@
 └── calibrations/rectify_params.yaml
 ```
 
-识别不回退到原始左目，视频分辨率须与标定一致。后续阶段再补这些输入：
+一个任务里有多条时，每条样本是 `data/chunk-000/episode_NNNNNN/`。视频在任务根目录，文件名与该条编号一致：
+
+```text
+<dataset>/
+├── videos/chunk-000/observation.images.headband_left_rgb_rectified/episode_000000.mp4
+├── videos/chunk-000/observation.images.headband_left_rgb_rectified/episode_000001.mp4
+├── data/chunk-000/episode_000000/
+├── data/chunk-000/episode_000001/
+└── calibrations/rectify_params.yaml
+```
+
+标定优先读取 `calibrations/chunk-000/episode_NNNNNN/rectify_params.yaml`，不存在时读取任务级 `calibrations/rectify_params.yaml`。各条标定不能互相替代。
+
+纯 CV 选帧只需要矫正左目视频。进入几何审核还需要上面对应的时间戳和标定。识别不回退到原始左目，视频分辨率须与标定一致。后续阶段再补这些输入：
 
 - **轴向预览**：可同步的头部、对应腕部位姿和相机外参。
 - **通过审核、导出、重建**：完整的 [六个目标 Parquet](../docs/review_rebuild.md#重建与备份)。审核提交时即校验结构。
@@ -25,7 +40,7 @@
 
 `run --profile` 有三种预设，显式命令行参数覆盖预设：
 
-- `legacy`：默认。`transport=api`，读取 `vive_correct/openai.local.json`，默认 `--stage all`。
+- `legacy`：默认。`transport=api`，读取 `vive_correct/openai.local.json`，默认 `--stage all`。该文件优先于环境变量和 `.env`；`--model`、`--api-key`、`--model-config` 仍优先于该文件。
 - `astra`：已登录的 Codex CLI，模型为 `gpt-6-astra`。必须显式 `--profile astra`。
 - `cv`：OpenCV 选帧，默认 `--stage features`，模型默认关闭。
 
@@ -40,7 +55,7 @@
 
 `--episodes-file FILE` 限定样本。`--dry-run` 只预览计划。CV 扫描和调参见 [CV 选帧](../docs/cv_detection.md)。
 
-本地模型配置复制 [openai.example.json](openai.example.json) 为 `openai.local.json` 后填写密钥。该文件已被忽略，不要提交。
+本地模型配置是 [openai.local.json](openai.local.json)。没有该文件时，复制 [openai.example.json](openai.example.json) 后填写密钥。该文件已被忽略，不要提交。
 
 ## 独立模型候选流程
 

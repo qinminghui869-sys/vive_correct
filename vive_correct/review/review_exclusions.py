@@ -2,7 +2,7 @@
 
 from pathlib import Path
 
-from vive_correct.review_io import read_json
+from vive_correct.review.review_io import read_json
 
 FILENAME = "rejected_episodes.json"
 

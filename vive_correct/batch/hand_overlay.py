@@ -1,7 +1,5 @@
 """Project timestamp-matched hand joints; never invent a MANO surface or alignment."""
 
-from pathlib import Path
-
 import cv2
 import numpy as np
 import pyarrow.parquet as pq
@@ -91,7 +89,9 @@ class HandOverlay:
         )
         self.mount = np.asarray(mount, float) if mount is not None else None
         self.status = "calibrated_projection" if accepted else "unverified_preview"
-        root = Path(episode) / "data/chunk-000/episode_000000"
+        from vive_correct.data.layout import data_directory
+
+        root = data_directory(episode)
         try:
             self.head = PoseStream.load(root / "observation.head_pose.parquet")
         except (OSError, ValueError, KeyError) as error:

@@ -3,7 +3,7 @@
 
 import argparse
 from pathlib import Path
-from vive_correct.raw_view import main as raw
+from vive_correct.export.raw_view import main as raw
 
 
 def main():

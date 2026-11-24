@@ -16,11 +16,21 @@ python3 -m pip install -r requirements.txt
 
 ## 快速开始
 
-把 `<dataset>` 换成数据集目录。各阶段使用同一个输出目录。
+默认读取 `/mnt/nas/synnas/脑电/KS3`。过程文件写入本仓库的 `outputs/ks3`。两种目录格式见 [输入要求](vive_correct/README.md#输入要求)。
 
 ```bash
-bash scripts/run_cv.sh <dataset> outputs/review --jobs 4
+DATASET="/path/to/dataset"
+OUT="outputs/review"
+bash scripts/run_cv.sh "$DATASET" "$OUT"
 ```
+
+上面的命令只做 OpenCV 选帧。如需 AI 预审，首次运行时改用：
+
+```bash
+bash scripts/run_cv.sh "$DATASET" "$OUT" --ai-final-review
+```
+
+模型配置读取 `vive_correct/openai.local.json`，格式见 [配置说明](vive_correct/README.md#配置与优先级)。所有阶段使用同一个输出目录。
 
 另开终端启动审核，可与选帧同时进行：
 
@@ -28,7 +38,7 @@ bash scripts/run_cv.sh <dataset> outputs/review --jobs 4
 python3 -m vive_correct review --out outputs/review --port 18775
 ```
 
-打开 http://127.0.0.1:18775 。核对物理左右手、四角和红 X / 绿 Y / 蓝 Z，填写审核人后提交。**通过**进入后续处理，**不通过**排除整条，**暂存**保留草稿。页面操作见 [审核指南](docs/user_guide.md)。启用 AI 预审见 [AI 预审](docs/ai_review.md)。
+打开 [审核页面](http://127.0.0.1:18775)。核对物理左右手、四角和红 X / 绿 Y / 蓝 Z，填写审核人后提交。**通过**进入后续处理，**不通过**排除整条，**暂存**保留草稿。页面操作见 [审核指南](docs/user_guide.md)。启用 AI 预审见 [AI 预审](docs/ai_review.md)。
 
 只处理已通过且依据仍有效的数据：
 
@@ -51,3 +61,7 @@ python3 -m vive_correct rebuild --out outputs/review
 - 操作：[输入与配置](vive_correct/README.md) · [CV 选帧](docs/cv_detection.md) · [AI 预审](docs/ai_review.md) · [人工审核](docs/user_guide.md) · [导出与重建](docs/review_rebuild.md)
 - 技术：[字段与接口](docs/observations_schema.md) · [校准模型](docs/hand_pipeline.md) · [RRD 输入](ego_data/README_rerun.md) · [开发与验证](docs/development.md)
 - 历史记录，不作为当前能力承诺：[安装标定](docs/hand_calibration.md) · [模型实验](docs/experiments.md) · [CV 验证](docs/cv_validation.md)
+
+## 验证
+
+提交前运行 `bash scripts/check.sh`。真实数据 smoke 测试的命令与验收边界见 [Smoke 测试](docs/smoke_test.md)。

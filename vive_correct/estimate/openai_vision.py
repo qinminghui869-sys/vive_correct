@@ -2,14 +2,14 @@
 
 The classical detector does not use a neural model. This module is used only
 when --detector ai is explicitly selected and an API key is configured.
-The default model name is gpt-4o and the
-default base URL is the official OpenAI v1 endpoint. Any server that accepts
+The packaged example uses qwen3.8-max and a compatible-mode URL. Any server that accepts
 `POST /chat/completions` with a Bearer key and an image_url content part can
 be selected with base_url and model.
 
-Key lookup order: --api-key, OPENAI_API_KEY, vive_correct/.env or the repo
-.env, then vive_correct/openai.local.json. The key is never written to disk
-by this module.
+Key lookup order: --api-key, vive_correct/openai.local.json, OPENAI_API_KEY,
+then vive_correct/.env or the repo .env. Command-line values still win.
+The default model and base URL come from that JSON. The key is never written
+to disk by this module.
 """
 
 from __future__ import annotations
@@ -84,12 +84,12 @@ def _local_file(path: Path) -> dict:
     return data
 
 
-def _pick(cli, env_value, dotenv_value, file_value, default):
+def _pick(cli, file_value, env_value, dotenv_value, default):
     for value, source in (
         (cli, "cli"),
+        (file_value, "openai.local.json"),
         (env_value, "env"),
         (dotenv_value, "dotenv"),
-        (file_value, "openai.local.json"),
     ):
         if value is None:
             continue
@@ -118,25 +118,25 @@ def load_config(
     dots = _dotenv(list(dotenv_paths))
     key, key_source = _pick(
         api_key,
+        local.get("api_key") or local.get("openai_api_key"),
         env.get("OPENAI_API_KEY"),
         dots.get("OPENAI_API_KEY"),
-        local.get("api_key") or local.get("openai_api_key"),
         None,
     )
     if not key:
         return None
     resolved_base, _ = _pick(
         base_url,
+        local.get("base_url"),
         env.get("OPENAI_BASE_URL"),
         dots.get("OPENAI_BASE_URL"),
-        local.get("base_url"),
         DEFAULT_BASE_URL,
     )
     resolved_model, _ = _pick(
         model,
+        local.get("model"),
         env.get("OPENAI_MODEL"),
         dots.get("OPENAI_MODEL"),
-        local.get("model"),
         DEFAULT_MODEL,
     )
     return OpenAIConfig(key, resolved_base, resolved_model, key_source)

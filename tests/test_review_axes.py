@@ -14,19 +14,19 @@ import pyarrow.parquet as pq
 from scipy.spatial.transform import Rotation
 from test_human_review import make_fixture
 
-from vive_correct.axis_calibration import (
+from vive_correct.review.axis_calibration import (
     axis_angles,
     local_rotation,
     preview,
     project_axes,
     corner_correction,
 )
-from vive_correct.human_review import ReviewStore
-from vive_correct.parquet_correction import translate
-from vive_correct.review_bundle import approve, load_bundle, stage_files
-from vive_correct.review_io import atomic_json, read_json
-from vive_correct.source_data import DATA
-from vive_correct.review_server import ReviewServer
+from vive_correct.review.human_review import ReviewStore
+from vive_correct.review.parquet_correction import translate
+from vive_correct.review.review_bundle import approve, load_bundle, stage_files
+from vive_correct.review.review_io import atomic_json, read_json
+from vive_correct.data.source_data import DATA
+from vive_correct.review.review_server import ReviewServer
 from vive_correct.estimate.geometry import Camera, LABEL_CORNERS, local_basis
 
 
@@ -278,7 +278,7 @@ class AxisTests(unittest.TestCase):
         np.testing.assert_allclose(result["origin_camera_m"], target)
 
     def test_preview_http_is_readonly_and_reuses_geometry_until_inputs_change(self):
-        from vive_correct.review_server import preview as calculate
+        from vive_correct.review.review_server import preview as calculate
 
         server = ReviewServer(self.output, 0, self.mount)
         self.addCleanup(server.server_close)
@@ -300,7 +300,7 @@ class AxisTests(unittest.TestCase):
             return response.status, json.loads(response.read())
 
         self.assertEqual(request(choice, {"Content-Type": "application/json"})[0], 403)
-        with patch("vive_correct.review_server.preview", wraps=calculate) as compute:
+        with patch("vive_correct.review.review_server.preview", wraps=calculate) as compute:
             status, source = request(choice)
             self.assertEqual(status, 200)
             status, rotated = request(dict(choice, axis_angles_deg=[0, 0, 90]))

@@ -15,14 +15,15 @@ from pathlib import Path
 import time
 import uuid
 
-from vive_correct.review_io import atomic_json, output_lock
-from vive_correct.task_locks import operation_lock
+from vive_correct.review.review_io import atomic_json, output_lock
+from vive_correct.runtime.task_locks import operation_lock
 
 import cv2
 import numpy as np
 
 from vive_correct.batch.report_io import write_json
-from vive_correct.dataset import VIDEO_SUFFIX, input_signature, select_episodes, source_hashes
+from vive_correct.data.dataset import input_signature, select_episodes, source_hashes
+from vive_correct.data.layout import video_file
 from vive_correct.estimate.label_detection import (
     black_context_metrics,
     detect_label_candidates,
@@ -172,7 +173,7 @@ RAW_LEFT_SUFFIX = Path("videos/chunk-000/observation.images.headband_bleft_rgb/e
 
 
 def feature_video(episode):
-    return episode / VIDEO_SUFFIX, "rectified"
+    return video_file(episode), "rectified"
 
 
 def feature_video_signature(episode):
@@ -786,7 +787,7 @@ def _run_feature_dataset(args, dataset, output, config):
 
     publish()
     last_summary = 0.0
-    from vive_correct.ai_final_review import FinalReviewQueue
+    from vive_correct.ai.ai_final_review import FinalReviewQueue
 
     with (
         FinalReviewQueue(args, output, config) as ai_queue,

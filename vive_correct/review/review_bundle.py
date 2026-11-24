@@ -2,7 +2,7 @@
 
 import uuid
 from time import perf_counter
-from vive_correct.task_locks import operation_lock
+from vive_correct.runtime.task_locks import operation_lock
 from pathlib import Path
 
 import cv2
@@ -11,14 +11,14 @@ import pyarrow.parquet as pq
 
 from ego_data.vive_origin_alignment import build_alignment
 from vive_correct.batch.report_io import digest
-from vive_correct.human_review import (
+from vive_correct.review.human_review import (
     decode_frame,
     verify_provenance,
 )
-from vive_correct.parquet_correction import translate, verify_table
-from vive_correct.review_io import atomic_json, export_code_signature, output_lock, read_json
-from vive_correct.source_data import DATA, FILES, baseline_read, original_files
-from vive_correct.axis_calibration import enrich_pose
+from vive_correct.review.parquet_correction import translate, verify_table
+from vive_correct.review.review_io import atomic_json, export_code_signature, output_lock, read_json
+from vive_correct.data.source_data import DATA, FILES, baseline_read, original_files
+from vive_correct.review.axis_calibration import enrich_pose
 
 
 def load_bundle(store, index, calibration):

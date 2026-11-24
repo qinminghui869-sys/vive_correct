@@ -13,24 +13,25 @@ import pyarrow.parquet as pq
 
 from ego_data.vive_origin_alignment import build_alignment
 from vive_correct.batch.report_io import digest
-from vive_correct.human_review import (
+from vive_correct.review.human_review import (
     SIDES,
     ReviewStore,
     output_directory,
     verify_provenance,
 )
-from vive_correct.parquet_correction import translate, verify_table
-from vive_correct.rerun_export import DEFAULT_MOUNT, export_recordings
-from vive_correct.review_io import (
+from vive_correct.review.parquet_correction import translate, verify_table
+from vive_correct.export.rerun_export import DEFAULT_MOUNT, export_recordings
+from vive_correct.review.review_io import (
     atomic_json,
     export_code_signature,
     merge_rows,
     output_lock,
     read_json,
 )
-from vive_correct.source_data import DATA, original_path
-from vive_correct.task_locks import operation_lock
-from vive_correct.review_exclusions import FILENAME, skipped
+from vive_correct.data.layout import data_directory
+from vive_correct.data.source_data import DATA, original_path
+from vive_correct.runtime.task_locks import operation_lock
+from vive_correct.review.review_exclusions import FILENAME, skipped
 
 
 def write_corrected_wrists(episode, destination, alignment):
@@ -38,7 +39,9 @@ def write_corrected_wrists(episode, destination, alignment):
     files = {}
     for side in SIDES:
         relative = DATA / f"observation.{side}_wrist_pose.parquet"
-        original = pq.read_table(original_path(episode / relative))
+        original = pq.read_table(
+            original_path(data_directory(episode) / f"observation.{side}_wrist_pose.parquet")
+        )
         table, counts = translate(original, relative.name, alignment)
         corrected_rows = counts["x"]
         path = destination / relative
@@ -106,7 +109,7 @@ def repair_dataset(
         )
         for i in targets
     ):
-        from vive_correct.review_actions import export_approved
+        from vive_correct.review.review_actions import export_approved
 
         def export_one(i):
             try:

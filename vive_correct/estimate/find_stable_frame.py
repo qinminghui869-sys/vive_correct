@@ -9,7 +9,8 @@ import numpy as np
 import pyarrow.parquet as pq
 
 from vive_correct.config import estimate_settings
-from vive_correct.estimate.geometry import Camera, MIN_EDGE_PX, VIDEO_KEY, estimate_pose, order_quad
+from vive_correct.estimate.geometry import Camera, MIN_EDGE_PX, estimate_pose, order_quad
+from vive_correct.data.layout import calibration_file, timestamp_file, video_file
 from vive_correct.estimate.label_detection import refine_corners
 
 _SELECTION = estimate_settings()["selection"]
@@ -53,12 +54,12 @@ class Episode:
     @classmethod
     def load(cls, path):
         path = Path(path).resolve()
-        video = path / f"videos/chunk-000/{VIDEO_KEY}/episode_000000.mp4"
-        timestamps = path / f"data/chunk-000/episode_000000/{VIDEO_KEY}.parquet"
+        video = video_file(path)
+        timestamps = timestamp_file(path)
         for file in (video, timestamps):
             if not file.is_file():
                 raise FileNotFoundError(file)
-        camera = Camera.load(path / "calibrations/rectify_params.yaml")
+        camera = Camera.load(calibration_file(path))
         cap = cv2.VideoCapture(str(video))
         try:
             if not cap.isOpened():

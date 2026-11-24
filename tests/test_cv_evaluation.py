@@ -6,12 +6,12 @@ from unittest.mock import patch
 
 import numpy as np
 
-from vive_correct.cv_evaluation import audit_best, audit_tracks, main, score_frames
+from vive_correct.cv.cv_evaluation import audit_best, audit_tracks, main, score_frames
 
 
 class EvaluationTests(unittest.TestCase):
     def test_unreviewed_frames_do_not_become_ground_truth(self):
-        with patch("vive_correct.cv_evaluation.cv2.VideoCapture", side_effect=AssertionError):
+        with patch("vive_correct.cv.cv_evaluation.cv2.VideoCapture", side_effect=AssertionError):
             result = score_frames(Path("/data"), [{"human_reviewed": False}], None)
         self.assertEqual(result["frames"], 0)
         self.assertIsNone(result["precision"])
@@ -82,7 +82,7 @@ class EvaluationTests(unittest.TestCase):
                 labels=[dict(side="left", quad=quad[::-1].tolist())],
             )
         ]
-        with patch("vive_correct.cv_evaluation.cv2.VideoCapture") as capture:
+        with patch("vive_correct.cv.cv_evaluation.cv2.VideoCapture") as capture:
             capture.return_value.read.return_value = (True, image)
             result = score_frames(
                 Path("/data"), annotations, lambda *args, **kwargs: {"left": [quad, quad]}

@@ -12,16 +12,16 @@ from unittest.mock import patch
 from test_human_review import make_fixture
 
 from vive_correct.batch.report_io import digest
-from vive_correct.dataset import VIDEO_SUFFIX
-from vive_correct.human_review import ReviewStore, verify_provenance
-from vive_correct.review_actions import export_approved, rebuild
-from vive_correct.review_bundle import approve, load_bundle, stage_files
-from vive_correct.review_exclusions import FILENAME
-from vive_correct.review_io import atomic_json, read_json
-from vive_correct.review_repair import repair_dataset
-from vive_correct.review_server import ReviewServer
-from vive_correct.source_data import DATA, FILES
-from vive_correct.task_locks import reserve
+from vive_correct.data.dataset import VIDEO_SUFFIX
+from vive_correct.review.human_review import ReviewStore, verify_provenance
+from vive_correct.review.review_actions import export_approved, rebuild
+from vive_correct.review.review_bundle import approve, load_bundle, stage_files
+from vive_correct.review.review_exclusions import FILENAME
+from vive_correct.review.review_io import atomic_json, read_json
+from vive_correct.review.review_repair import repair_dataset
+from vive_correct.review.review_server import ReviewServer
+from vive_correct.data.source_data import DATA, FILES
+from vive_correct.runtime.task_locks import reserve
 
 
 class ExclusionTests(unittest.TestCase):
@@ -45,7 +45,7 @@ class ExclusionTests(unittest.TestCase):
     def test_missing_video_can_be_excluded_and_record_is_idempotent(self):
         (self.episode / VIDEO_SUFFIX).unlink()
         payload = self.payload()
-        with patch("vive_correct.human_review.checked_pose") as geometry:
+        with patch("vive_correct.review.human_review.checked_pose") as geometry:
             state = self.store.reject_episode(0, payload)
         geometry.assert_not_called()
         self.assertEqual(state["status"], "excluded")
@@ -121,8 +121,8 @@ class ExclusionTests(unittest.TestCase):
             with self.subTest(operation=operation), self.assertRaisesRegex(ValueError, "不通过"):
                 operation()
         with (
-            patch("vive_correct.review_actions.stage_files") as prepare,
-            patch("vive_correct.review_actions.export_recordings") as render,
+            patch("vive_correct.review.review_actions.stage_files") as prepare,
+            patch("vive_correct.review.review_actions.export_recordings") as render,
         ):
             exported = repair_dataset(self.output, self.mount)
             for in_place in (False, True):
@@ -162,7 +162,8 @@ class ExclusionTests(unittest.TestCase):
         self.approve(other)
         self.store.reject_episode(0, self.payload())
         with patch(
-            "vive_correct.review_actions.export_approved", return_value={"status": "complete"}
+            "vive_correct.review.review_actions.export_approved",
+            return_value={"status": "complete"},
         ) as render:
             result = repair_dataset(self.output, self.mount)
         self.assertEqual(result["status"], "complete")

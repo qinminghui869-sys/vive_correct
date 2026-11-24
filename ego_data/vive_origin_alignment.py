@@ -17,9 +17,9 @@ else:
 
 
 def pose_stream(path):
-    from vive_correct.source_data import original_path
+    from vive_correct.data.source_data import original_path
 
-    from vive_correct.runtime_cache import cached_file
+    from vive_correct.runtime.runtime_cache import cached_file
 
     source = original_path(path)
 
@@ -35,13 +35,15 @@ def pose_stream(path):
 def build_alignment(
     episode, report_path, calibration_path, *, refine_depth=False, require_bilateral=True
 ):
-    from vive_correct.axis_calibration import local_rotation
+    from vive_correct.review.axis_calibration import local_rotation
 
     report = report_path if isinstance(report_path, dict) else json.loads(report_path.read_text())
     calibration = json.loads(calibration_path.read_text())
     if Path(report["episode"]).resolve() != episode.resolve():
         raise ValueError("Origin report belongs to another episode")
-    data = episode / "data/chunk-000/episode_000000"
+    from vive_correct.data.layout import data_directory
+
+    data = data_directory(episode)
     needed = {side + "_wrist" for o in report["observations"] for side in o["stickers"]}
     if not needed <= {"left_wrist", "right_wrist"}:
         raise ValueError("Unknown hand side")

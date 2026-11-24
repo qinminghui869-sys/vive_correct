@@ -10,7 +10,8 @@ from contextlib import contextmanager
 from pathlib import Path
 
 from vive_correct.batch.report_io import digest
-from vive_correct.review_io import atomic_json, read_json, sync_directory
+from vive_correct.data.layout import data_directory, is_indexed_episode
+from vive_correct.review.review_io import atomic_json, read_json, sync_directory
 
 DATA = Path("data/chunk-000/episode_000000")
 FILES = (
@@ -92,13 +93,13 @@ def recover_locked(episode):
     transaction = directory / "transactions" / job["id"]
     # Never discard an unrelated edit made after interruption.
     for name, row in job["files"].items():
-        current = Path(episode) / DATA / name
+        current = data_directory(episode) / name
         if current.exists() and digest(current) not in (row["before"], row["after"]):
             raise ValueError(f"中断恢复冲突：{current} 已被外部修改")
         if digest(transaction / "previous" / name) != row["before"]:
             raise ValueError(f"中断恢复副本损坏：{name}")
     for name in FILES:
-        target = Path(episode) / DATA / name
+        target = data_directory(episode) / name
         temporary = target.with_name(target.name + ".restore")
         copy_file(transaction / "previous" / name, temporary)
         os.replace(temporary, target)
@@ -106,12 +107,12 @@ def recover_locked(episode):
     if job["previous_state"] is None:
         state_path.unlink(missing_ok=True)
         for name in job["created_backups"]:
-            backup = Path(episode) / DATA / (name + ".bak")
+            backup = data_directory(episode) / (name + ".bak")
             if backup.exists() and os.path.samefile(backup, transaction / "previous" / name):
                 backup.unlink()
     else:
         durable_json(state_path, job["previous_state"])
-    sync_directory(Path(episode) / DATA)
+    sync_directory(data_directory(episode))
     durable_json(journal_path, dict(job, status="rolled_back"))
 
 
@@ -129,7 +130,7 @@ def original_files(episode):
     state = read_json(state_path) if state_path.exists() else None
     result = {}
     for name in FILES:
-        current = episode / DATA / name
+        current = data_directory(episode) / name
         backup = current.with_name(name + ".bak")
         if state:
             row = state["files"][name]
@@ -147,13 +148,15 @@ def original_files(episode):
 
 def original_path(path):
     path = Path(path)
+    parent = path.parent
     if (
         path.name in FILES
-        and path.parent.name == "episode_000000"
-        and path.parent.parent.name == "chunk-000"
-        and path.parent.parent.parent.name == "data"
+        and parent.name.startswith("episode_")
+        and parent.parent.name == "chunk-000"
+        and parent.parent.parent.name == "data"
     ):
-        return original_files(path.parents[3])[path.name]
+        episode = parent if is_indexed_episode(parent) else path.parents[3]
+        return original_files(episode)[path.name]
     return path
 
 
@@ -173,7 +176,7 @@ def apply_files(episode, files, baseline_hashes, bundle):
             (transaction / sub).mkdir(parents=True)
         rows, target = {}, {}
         for name in FILES:
-            current = episode / DATA / name
+            current = data_directory(episode) / name
             row = files[name]
             if digest(Path(row["path"])) != row["sha256"]:
                 raise ValueError(f"修正产物已变化：{name}")
@@ -183,7 +186,7 @@ def apply_files(episode, files, baseline_hashes, bundle):
             target[name] = dict(baseline_sha256=baseline_hashes[name], current_sha256=row["sha256"])
         # Check again after copying, before publishing a journal or backups.
         if any(
-            digest(episode / DATA / n) != rows[n]["before"]
+            digest(data_directory(episode) / n) != rows[n]["before"]
             or digest(transaction / "previous" / n) != rows[n]["before"]
             for n in FILES
         ):
@@ -201,19 +204,19 @@ def apply_files(episode, files, baseline_hashes, bundle):
         try:
             if previous is None:
                 for name in FILES:
-                    backup = episode / DATA / (name + ".bak")
+                    backup = data_directory(episode) / (name + ".bak")
                     # Same-filesystem link publishes a complete backup without clobbering
                     # another process's file; inode identity also proves rollback ownership.
                     os.link(transaction / "previous" / name, backup)
                     if digest(backup) != baseline_hashes[name]:
                         raise ValueError(f"备份校验失败：{name}")
-                sync_directory(episode / DATA)
+                sync_directory(data_directory(episode))
             for name in FILES:
-                if digest(episode / DATA / name) != rows[name]["before"]:
+                if digest(data_directory(episode) / name) != rows[name]["before"]:
                     raise ValueError(f"覆盖期间源文件发生变化：{name}")
-                os.replace(transaction / "new" / name, episode / DATA / name)
-            sync_directory(episode / DATA)
-            if any(digest(episode / DATA / n) != rows[n]["after"] for n in FILES):
+                os.replace(transaction / "new" / name, data_directory(episode) / name)
+            sync_directory(data_directory(episode))
+            if any(digest(data_directory(episode) / n) != rows[n]["after"] for n in FILES):
                 raise ValueError("覆盖结果校验失败")
             durable_json(
                 state_path,
@@ -226,5 +229,5 @@ def apply_files(episode, files, baseline_hashes, bundle):
         return dict(
             status="complete",
             transaction=identifier,
-            backups=[str(episode / DATA / (n + ".bak")) for n in FILES],
+            backups=[str(data_directory(episode) / (n + ".bak")) for n in FILES],
         )

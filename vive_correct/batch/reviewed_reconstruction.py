@@ -7,6 +7,7 @@ from pathlib import Path
 
 from vive_correct.estimate.find_stable_frame import SelectionConfig
 from vive_correct.estimate.geometry import Camera, corner_noise_sensitivity
+from vive_correct.data.layout import calibration_file
 from vive_correct.estimate.sticker_pipeline import run
 
 
@@ -92,7 +93,7 @@ def reconstruct(pool_path, review_path, output):
         rejected=pool.get("rejected", {}),
         rejected_reviewed_frames=rejected,
     )
-    camera = Camera.load(Path(pool["episode"]) / "calibrations/rectify_params.yaml")
+    camera = Camera.load(calibration_file(pool["episode"]))
     for observation in selected:
         for pose in observation["stickers"].values():
             if pose.get("low_resolution"):

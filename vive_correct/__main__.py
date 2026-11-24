@@ -6,13 +6,13 @@ from importlib import import_module
 
 COMMANDS = {
     "run": "run_dataset",
-    "view": "viewer",
-    "raw": "raw_view",
+    "view": "export.viewer",
+    "raw": "export.raw_view",
     "estimate": "estimate.sticker_pipeline",
     "batch": "batch.workflow",
-    "review": "review_server",
-    "repair": "review_repair",
-    "rebuild": "review_actions",
+    "review": "review.review_server",
+    "repair": "review.review_repair",
+    "rebuild": "review.review_actions",
 }
 
 

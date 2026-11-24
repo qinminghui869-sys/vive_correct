@@ -14,12 +14,12 @@ import numpy as np
 from scipy.spatial.transform import Rotation
 
 from test_human_review import make_fixture
-from vive_correct import ai_final_review as ai
+from vive_correct.ai import ai_final_review as ai
 from vive_correct.estimate.cv_config import CVConfig
 from vive_correct.estimate.openai_vision import OpenAIConfig
-from vive_correct.human_review import ReviewStore
-from vive_correct.review_io import atomic_json, read_json
-from vive_correct.review_server import ReviewServer
+from vive_correct.review.human_review import ReviewStore
+from vive_correct.review.review_io import atomic_json, read_json
+from vive_correct.review.review_server import ReviewServer
 
 
 def decision(box="ok", axis="keep", steps=None):
@@ -225,7 +225,7 @@ class FinalReviewTests(unittest.TestCase):
                 "vive_correct.estimate.label_detection.detect_label_candidates",
                 return_value={"candidates": {"left": [candidate]}},
             ) as detector,
-            patch("vive_correct.cv_features.feature_rejection_reason", return_value=None),
+            patch("vive_correct.cv.cv_features.feature_rejection_reason", return_value=None),
         ):
             revised = ai.redetect(
                 self.episode, "left", self.original["left"], [100, 500, 400, 900], self.cv
@@ -328,7 +328,9 @@ class ResponseAndRotationTests(unittest.TestCase):
                 for degree in (-90, 90, 180):
                     cases.append(dict(angles=angles, steps=[{"axis": axis, "degrees": degree}]))
             cases.append(dict(angles=angles, steps=[{"axis": a, "degrees": 90} for a in "XYZ"]))
-        script = Path(__file__).resolve().parents[1] / "vive_correct/review_ui/axis_rotation.js"
+        script = (
+            Path(__file__).resolve().parents[1] / "vive_correct/review/review_ui/axis_rotation.js"
+        )
         result = subprocess.run(
             [
                 "node",
