@@ -27,6 +27,7 @@ def export_corrected_rgb(
     selected=None,
     hand_points_dir=None,
     reviewed_data=None,
+    camera_calibration=None,
 ):
     episode, output = Path(episode), Path(output)
     alignment = json.loads(Path(alignment_path).read_text())
@@ -84,6 +85,15 @@ def export_corrected_rgb(
             hands[side] = resample_tracking((table["timestamp"].to_numpy(), points), times)[
                 1
             ].reshape(-1, 21, 3)
+    from ego_data.rgb_projection import RGBProjection
+
+    projection = RGBProjection(
+        episode, times, camera_calibration or alignment.get("camera_calibration")
+    )
+    print(
+        f"Render mode: RGB hand overlay; timeline: rectified_rgb; projection: {projection.reason or 'available'}",
+        flush=True,
+    )
     output.parent.mkdir(parents=True, exist_ok=True)
     rr.init(episode.name + "_corrected_rgb", strict=True)
     rr.save(str(output))
@@ -93,7 +103,7 @@ def export_corrected_rgb(
         rr.TextDocument(
             "User-confirmed label side mapping. Corrected wrists use the saved calibration model. "
             "Not a calibrated VIVE internal origin or per-frame visual tracking. No depth cloud. "
-            "RGB is rectified only. Gray: original; color: corrected.\n"
+            "RGB overlays use world hand points and the configured camera mount. Gray: original; color: corrected.\n"
             + json.dumps(alignment, ensure_ascii=False)
         ),
         static=True,
@@ -116,7 +126,9 @@ def export_corrected_rgb(
                 if index not in wanted:
                     continue
                 rr.set_time_sequence("frame", index)
-                rr.log("rgb", rr.Image(frame.to_ndarray(format="rgb24")).compress(jpeg_quality=85))
+                image = frame.to_ndarray(format="rgb24")
+                rr.log("rgb", rr.Image(image).compress(jpeg_quality=85))
+                rr.log("rgb/hands", rr.Clear(recursive=True))
                 for side, color in (("left", [255, 200, 30]), ("right", [180, 70, 255])):
                     path = f"world/{side}"
                     rr.log(path, rr.Clear(recursive=True))
@@ -171,6 +183,7 @@ def export_corrected_rgb(
                                         original[valid], colors=[140, 140, 140], radii=0.003
                                     ),
                                 )
+                        projection.log(side, points, index, image.shape, color)
                         if np.isfinite(points).all():
                             rr.log(path + "/hand", rr.Points3D(points, colors=color, radii=0.004))
                             rr.log(
@@ -194,6 +207,7 @@ def export_corrected_rgb(
         invalid_wrist_frames=invalid,
         verified_hand_sides=list(hands),
         source_alignment=str(alignment_path),
+        hand_projection=projection.report(),
         frame_timeline="rectified_rgb",
     )
     output.with_suffix(".json").write_text(json.dumps(result, indent=2) + "\n")

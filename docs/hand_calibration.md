@@ -10,16 +10,8 @@
 {
   "frame": 100,
   "split": "train",
-  "source_tracker_m": [
-    0.01,
-    -0.08,
-    -0.05
-  ],
-  "target_tracker_m": [
-    0.02,
-    -0.07,
-    -0.04
-  ]
+  "source_tracker_m": [0.01, -0.08, -0.05],
+  "target_tracker_m": [0.02, -0.07, -0.04]
 }
 ```
 
@@ -27,7 +19,7 @@
 
 至少 3 个训练帧、2 个不重叠验证帧，训练与验证各 ≥6 个对应点；默认验证最大误差 ≤20 mm（可配置，不是当前数据精度声明）。
 
-## 生成与使用
+## 运行与集成
 
 ```bash
 python3 ego_data/hand_calibration.py \

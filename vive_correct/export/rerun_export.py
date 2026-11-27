@@ -29,7 +29,9 @@ def check_dependencies(open_viewer=False):
 
 def export_recordings(work, calibration, *, open_viewer=False):
     import pyarrow.parquet as pq
+    from ego_data.render_inputs import depth_available
     from ego_data.vive_origin_alignment import build_alignment
+    from vive_correct.estimate.geometry import VIDEO_KEY
 
     check_dependencies(open_viewer)
     manifest_path = work / "batch/results/manifest.json"
@@ -89,11 +91,10 @@ def export_recordings(work, calibration, *, open_viewer=False):
             hand_status_path.write_text(
                 json.dumps(hand_status, ensure_ascii=False, indent=2) + "\n"
             )
-            time_path = timestamp_file(episode, DEPTH_KEY)
-            if not time_path.is_file():
-                from vive_correct.estimate.geometry import VIDEO_KEY
-
-                time_path = timestamp_file(episode, VIDEO_KEY)
+            # Match the renderer's metadata and video checks, including unmasked previews.
+            use_depth = depth_available(episode)
+            timeline = "depth" if use_depth else "rectified_rgb"
+            time_path = timestamp_file(episode, DEPTH_KEY if use_depth else VIDEO_KEY)
             times = pq.read_table(time_path)["timestamp"]
             if not len(times):
                 raise ValueError("Export timeline is empty")
@@ -126,14 +127,21 @@ def export_recordings(work, calibration, *, open_viewer=False):
                 str(pending),
             ]
             command += ["--hand-status", str(hand_status_path)]
+            if not use_depth:
+                command.append("--rgb-only")
             if reviewed_data:
                 command += ["--reviewed-data", str(reviewed_data)]
             if hands:
                 command += ["--hand-points-dir", str(hands)]
             if not alignment["pose_degrees"]:
                 command.append("--pose-radians")
-            print(f"Render: {episode.name} (0–{len(times) - 1}); log: {log}", flush=True)
+            print(
+                f"Render: {episode.name} ({timeline}, 0–{len(times) - 1}); log: {log}",
+                flush=True,
+            )
             with log.open("w") as stream:
+                stream.write(f"Export timeline: {timeline}; frames: {len(times)}\n")
+                stream.flush()
                 subprocess.run(command, stdout=stream, stderr=subprocess.STDOUT, check=True)
             stats = json.loads(pending.with_suffix(".json").read_text())
             if stats["frames"] < 1 or stats["frames"] + len(

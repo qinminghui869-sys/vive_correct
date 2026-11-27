@@ -6,7 +6,7 @@
 
 ## 输入要求
 
-默认数据集为 `/mnt/nas/synnas/脑电/KS3`，可用 `--dataset` 指定其他目录。输出默认写入 `outputs/ks3`。输入应包含矫正后的头带左目视频；眼部或头部其他相机不能直接替代。
+默认数据集为 `/mnt/nas/synnas/脑电/KS3`，可用 `--dataset` 指定其他目录；输出默认写入 `outputs/ks3`。选帧和几何审核使用矫正后的头带左目视频，其他相机不能替代。原始 RRD 查看支持的回退输入另见 [RRD 说明](../ego_data/README_rerun.md#rrd-inputs)。
 
 单条旧数据仍按原来的目录读取。一条里只有 `episode_000000` 时，样本根目录就是这条数据：
 
@@ -34,9 +34,9 @@
 
 - **轴向预览**：可同步的头部、对应腕部位姿和相机外参。
 - **通过审核、导出、重建**：完整的 [六个目标 Parquet](../docs/review_rebuild.md#rebuild-and-backup)。审核提交时即校验结构。
-- **完整深度 RRD**：深度、掩码、元数据和眼动输入，见 [RRD 说明](../ego_data/README_rerun.md#rrd-inputs)。
+- **RRD**：有可用深度与内参时显示点云，缺掩码标为预览；无深度时显示 RGB 手点叠加与矫正结果；详细输入见 [RRD 说明](../ego_data/README_rerun.md#rrd-inputs)。
 
-`eye_rgb` 只用于 RRD 眼动展示。`--initial-mount` 指定矫正左相机到头部的外参，不改变识别相机，见 [相机参数](../calibrations/README.md)。
+`eye_rgb` 用于点云 RRD 的眼动展示，RGB 回退不需要它。`--initial-mount` 指定矫正左相机到头部的外参，见 [相机参数](../calibrations/README.md)。
 
 <a id="configuration"></a>
 
@@ -59,7 +59,7 @@
 
 `--episodes-file FILE` 限定样本。`--dry-run` 只预览计划。CV 扫描和调参见 [CV 选帧](../docs/cv_detection.md)。
 
-本地模型配置是 `vive_correct/openai.local.json`。没有该文件时，复制 [openai.example.json](openai.example.json) 后填写密钥。该文件已被忽略，不要提交。
+本地模型配置缺失时，复制 [openai.example.json](openai.example.json) 为 `vive_correct/openai.local.json` 并填写密钥。该文件已被 Git 忽略，不要提交。
 
 <a id="model-pipeline"></a>
 

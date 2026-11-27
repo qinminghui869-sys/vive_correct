@@ -9,7 +9,7 @@ AI 预审默认关闭。它只检查 OpenCV 最终选中的结果，不遍历候
 Codex 通道显式加 `--transport codex`。模型名来自 [run.yaml](../vive_correct/config/run.yaml)，可用 `--codex-model` 覆盖。
 
 ```bash
-bash scripts/run_cv.sh /mnt/nas/synnas/脑电/KS3 outputs/ks3 \
+bash scripts/run_cv.sh "/path/to/dataset" outputs/ks3 \
   --ai-final-review --model-jobs 2
 
 python3 -m vive_correct review --out outputs/ks3
@@ -43,7 +43,7 @@ python3 -m vive_correct review --out outputs/new_review \
   --initial-mount configs/new_codex_review_mount.json --port 18775
 ```
 
-后续 `repair` 和 `rebuild` 传入同一配置。代码、输入或配置变化后换新输出目录，并重启审核服务。
+后续导出使用同一配置，见 [导出与重建](review_rebuild.md)。代码、输入或配置变化后换新输出目录，并重启审核服务。
 
 ## 结果与人工接管
 

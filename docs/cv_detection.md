@@ -62,9 +62,7 @@ feature_fast_timeout_s: 30.0
 
 未跟踪候选标记 `image_half_unverified`，只作画面半区提示。双手可能来自不同帧，不能作为同时刻相对位姿；四角坐标约定见 [字段与接口](observations_schema.md#coordinates)。
 
-## 可选：AI 检查最终框与 XYZ
-
-`--ai-final-review` 在选帧后异步检查最终框和轴，默认关闭。配置、拼接图和批次轴定义见 [AI 预审](ai_review.md)。
+可加 `--ai-final-review` 异步检查最终框和轴，默认关闭；配置及批次轴定义见 [AI 预审](ai_review.md)。
 
 ## 检测与可选跟踪
 

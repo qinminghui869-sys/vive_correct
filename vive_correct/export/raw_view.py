@@ -20,7 +20,9 @@ def main(argv=None):
     parser.add_argument("--initial-mount", type=Path, default=DEFAULT_MOUNT)
     parser.add_argument("--frames", type=int, nargs="+", help="Export selected zero-based frames")
     parser.add_argument(
-        "--rgb-only", action="store_true", help="Show RGB and original MANUS even when depth exists"
+        "--rgb-only",
+        action="store_true",
+        help="Show RGB with projected world hand joints and original MANUS",
     )
     parser.add_argument(
         "--manus",
@@ -42,13 +44,14 @@ def main(argv=None):
         parser.error("Output must be separate from the dataset")
     check_dependencies(args.open_rerun)
     timestamp_path = timestamp_file(episode, DEPTH_KEY)
-    from ego_data.manus_view import depth_available, rgb_source
+    from ego_data.manus_view import rgb_source
+    from ego_data.render_inputs import depth_available
 
     if args.rgb_only or not depth_available(episode):
         timestamp_path, _ = rgb_source(episode)
     count = pq.read_metadata(timestamp_path).num_rows
     if count < 1 or (args.frames and any(i < 0 or i >= count for i in args.frames)):
-        parser.error("Requested frames must lie within the depth stream")
+        parser.error("Requested frames must lie within the selected rendering timeline")
     mount = json.loads(args.initial_mount.read_text())
     output.mkdir(parents=True, exist_ok=True)
     hands = None

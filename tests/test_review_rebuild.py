@@ -451,8 +451,12 @@ class RebuildTests(unittest.TestCase):
         self.assertEqual(result["status"], "complete", result)
         updated = json.loads((meta / "episodes_stats.jsonl").read_text())
         original = json.loads(stats_text)
-        self.assertEqual(updated["stats"]["observation.head_pose"], original["stats"]["observation.head_pose"])
-        self.assertEqual(updated["stats"]["action"]["mean"][0], original["stats"]["action"]["mean"][0])
+        self.assertEqual(
+            updated["stats"]["observation.head_pose"], original["stats"]["observation.head_pose"]
+        )
+        self.assertEqual(
+            updated["stats"]["action"]["mean"][0], original["stats"]["action"]["mean"][0]
+        )
         self.assertNotEqual(
             updated["stats"]["observation.left_wrist_pose"]["mean"],
             original["stats"]["observation.left_wrist_pose"]["mean"],

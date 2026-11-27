@@ -15,7 +15,6 @@ from hand_calibration import apply_mount, rigid_matrix
 from cloud_visibility import local_hand_cloud_mask
 from tracking_sync import resample_tracking, normalize_tracking, sample_nearest
 from manus_view import log_nodes
-from depth_metadata import load_metadata
 
 ROOT = Path(__file__).resolve().parent
 sys.path.insert(0, str(ROOT.parent))
@@ -246,16 +245,18 @@ def main():
         or args.frustum_depth < 0
     ):
         ap.error("Require stride >= 1 and 0 <= start <= end")
-    from vive_correct.data.layout import annotation_dir, data_directory, dataset_root, episode_stem
+    from vive_correct.data.layout import data_directory, dataset_root, episode_stem
 
     data = data_directory(args.dataset)
     video = dataset_root(args.dataset) / "videos/chunk-000"
     stem = episode_stem(args.dataset)
     key = "observation.images.depth_headband_left_rectified"
-    ann = annotation_dir(args.dataset, key)
-    from manus_view import depth_available, export as export_manus
+    from manus_view import export as export_manus
+    from ego_data.render_inputs import depth_input
 
-    if (args.rgb_only or not depth_available(args.dataset)) and args.wrist_calibration:
+    depth_config = None if args.rgb_only else depth_input(args.dataset)
+
+    if depth_config is None and args.wrist_calibration:
         from corrected_rgb import export_corrected_rgb
 
         export_corrected_rgb(
@@ -267,9 +268,10 @@ def main():
             selected=args.frames,
             hand_points_dir=args.hand_points_dir,
             reviewed_data=args.reviewed_data,
+            camera_calibration=args.calibration,
         )
         return
-    if args.rgb_only or not depth_available(args.dataset):
+    if depth_config is None:
         print("RGB/MANUS fallback: depth unavailable or RGB-only requested", flush=True)
         fallback_status = json.loads(args.hand_status.read_text()) if args.hand_status else None
         export_manus(
@@ -280,12 +282,20 @@ def main():
             end=args.end,
             labels=args.show_labels,
             status=fallback_status,
+            camera_calibration=args.calibration,
+            hand_points_dir=args.hand_points_dir,
         )
         return
-    meta = load_metadata(ann)
+    meta = depth_config["metadata"]
+    print(
+        f"Render mode: {depth_config['mode']}; timeline: depth; metadata: {depth_config['metadata_source']}",
+        flush=True,
+    )
     k = meta["intrinsics"]["left"]
     with av.open(str(video / key / f"{stem}.mp4")) as container:
         width, height = container.streams.video[0].width, container.streams.video[0].height
+    if "resolution" in meta and meta["resolution"] != [width, height]:
+        raise ValueError("Depth video does not match calibrated resolution")
     times = pq.read_table(data / f"{key}.parquet")["timestamp"].to_numpy()
     if args.end >= len(times):
         ap.error(f"Last depth frame is {len(times) - 1}")
@@ -447,6 +457,11 @@ def main():
             "RAW PARQUET: original world hand coordinates",
             "REPAIRED SIDES: regenerated world hand coordinates",
         )
+    status += "\nDepth mode: " + depth_config["mode"]
+    if not depth_config["mask_path"]:
+        status += (
+            "\nNo validity mask: range-filtered preview; lossy depth may include invalid points."
+        )
     if wrist_calibration:
         status += (
             "\nWrist alignment applied to each wrist and all landmarks of that hand: "
@@ -596,7 +611,6 @@ def main():
     eye_image = None
     sources = [
         frames(video / key / f"{stem}.mp4", args.start, args.end),
-        frames(ann / "valid_mask_ffv1.mkv", args.start, args.end),
         frames(
             video / f"observation.images.headband_left_rgb_rectified/{stem}.mp4",
             args.start,
@@ -604,13 +618,27 @@ def main():
             True,
         ),
     ]
+    mask_frames = (
+        iter(frames(Path(depth_config["mask_path"]), args.start, args.end))
+        if depth_config["mask_path"]
+        else None
+    )
     counts = []
     hand_sync = []
     skipped_frames = []
     local_thinning_removed = {}
     selected_frames = set(args.frames) if args.frames else None
     gaze_hits = 0
-    for idx, (depth, mask, rgb) in enumerate(zip(*sources, strict=True), args.start):
+    for idx, (depth, rgb) in enumerate(zip(*sources, strict=True), args.start):
+        mask = (
+            next(mask_frames, None)
+            if mask_frames is not None
+            else np.ones(depth.shape, dtype=np.uint8)
+        )
+        if mask is None or mask.shape[:2] != depth.shape[:2] or rgb.shape[:2] != depth.shape[:2]:
+            raise ValueError(
+                "Depth, mask and RGB frames must have matching coverage and resolution"
+            )
         if selected_frames is not None and idx not in selected_frames:
             continue
         ts = float(times[idx])
@@ -641,7 +669,12 @@ def main():
         z = depth[:: args.stride, :: args.stride].astype(np.float32) / 1000
         if mask.ndim == 3:
             mask = mask[:, :, 0]
-        valid = (mask[:: args.stride, :: args.stride] > 0) & (z > 0) & (z <= meta["max_depth_m"])
+        valid = (
+            (mask[:: args.stride, :: args.stride] > 0)
+            & (z > 0)
+            & (z <= meta["max_depth_m"])
+            & (depth[:: args.stride, :: args.stride] != meta.get("invalid_value", 0))
+        )
         yy, xx = np.mgrid[0 : depth.shape[0] : args.stride, 0 : depth.shape[1] : args.stride]
         points = np.stack(((xx - k["cx"]) * z / k["fx"], (yy - k["cy"]) * z / k["fy"], z), axis=-1)
         if args.hand_cloud_fade_radius:
@@ -906,6 +939,8 @@ def main():
         counts.append(int(valid.sum()))
         if len(counts) % 30 == 0:
             print(f"frame {idx}, points {counts[-1]}", flush=True)
+    if mask_frames is not None and next(mask_frames, None) is not None:
+        raise ValueError("Mask video coverage differs from depth/RGB")
     if len(counts) + len(skipped_frames) != (
         len(selected_frames) if selected_frames is not None else args.end - args.start + 1
     ):
@@ -914,6 +949,10 @@ def main():
     if not counts:
         raise ValueError("No frames have valid synchronized head tracking")
     report = dict(
+        mode=depth_config["mode"],
+        frame_timeline="depth",
+        depth_metadata_source=depth_config["metadata_source"],
+        validity_mask=depth_config["mask_path"],
         display_radii_m={
             "pose_axes": args.pose_axis_radius,
             "frustum": args.frustum_radius,

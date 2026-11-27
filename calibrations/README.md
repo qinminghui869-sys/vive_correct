@@ -25,6 +25,6 @@
 
 这些是几何方向约定，不是设备物理轴的独立标定。预览响应字段见 [轴向预览](../docs/observations_schema.md#axis-preview)。
 
-## 其他标定文件
+## 原始内参与深度元数据
 
-`oak_calib_*.json`、`neon_scene_camera_*.json` 保留设备原始内参供核查。Neon 眼动相机内参不能替代头带矫正左目内参；深度渲染的两种元数据文件名与必需字段见 [RRD 说明](../ego_data/README_rerun.md#depth-metadata)。
+`oak_calib_*.json`、`neon_scene_camera_*.json` 保留设备原始内参供核查。Neon 眼动相机内参不能替代头带矫正左目内参；深度渲染的旧版元数据、新格式读取顺序及必需字段见 [RRD 说明](../ego_data/README_rerun.md#depth-metadata)。

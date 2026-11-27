@@ -21,11 +21,11 @@ python3 -m vive_correct repair --out outputs/ks3 --export-jobs 1
 python3 -m vive_correct view outputs/ks3
 ```
 
-`repair` 不代替审核。`view` 只打开已有录制。输入、审核、标定、代码和产物都没变时复用结果。深度不够时走 RGB；完整录制的输入见 [RRD 说明](../ego_data/README_rerun.md#rrd-inputs)。
+`repair` 只处理已通过且依据有效的数据，生成 RRD；`view` 打开已有录制。输入、审核、标定、代码和产物都没变时复用结果。点云、无掩码预览及 RGB 手点叠加的输入和时间线规则见 [RRD 说明](../ego_data/README_rerun.md#rrd-inputs)。
 
 <a id="rebuild-and-backup"></a>
 
-## 原地重建
+## Parquet 重建与源文件备份
 
 ```bash
 python3 -m vive_correct rebuild --out outputs/ks3
@@ -90,5 +90,7 @@ python3 -m vive_correct review --out outputs/ks3 --port 18775 \
 - **有标签却无候选**：按 [漏检排查](cv_detection.md#detection-troubleshooting) 换帧或手工补标。
 - **依据过期或版本冲突**：重新加载后再审。不要手改版本或哈希。
 - **重投影或同步失败**：按提示核对帧、四角和姿态时间戳。不要放宽阈值强行通过。
-- **导出失败**：看对应 `render.log`。排队不等于完成。
+- **导出失败**：先看 `repair_manifest.json` 的错误，再看对应 `render.log` 中的时间线、帧数及异常。仅成功完成的临时录制才发布为 `recording.rrd`；排队不等于完成。
+- **窗口出现但文件加载失败**：查看 `viewer.log`。Linux 的 `inotify` 实例耗尽会导致 `failed to create retryable file reader`；`view` 会自动改用仅监听 `127.0.0.1` 的 HTTP 读取，关闭窗口后自动停止服务，无需重新导出。
+- **RRD 没有点云**：按 [深度输入](../ego_data/README_rerun.md#rrd-inputs) 检查录制 JSON 的 `mode` 和 `frame_timeline`。缺掩码可生成预览点云；缺深度或参数才回退 RGB。手点未叠加时查看 `hand_projection` 的缺测、内参或外参原因。
 - **整条不通过**：看排除清单。「拒绝此侧」不会写入该清单。

@@ -43,7 +43,18 @@ def rgb_source(episode):
     raise ValueError("No supported RGB video with timestamps")
 
 
-def export(episode, output, *, selected=None, start=0, end=None, labels=False, status=None):
+def export(
+    episode,
+    output,
+    *,
+    selected=None,
+    start=0,
+    end=None,
+    labels=False,
+    status=None,
+    camera_calibration=None,
+    hand_points_dir=None,
+):
     episode, output = Path(episode), Path(output)
     timestamps, video = rgb_source(episode)
     times = pq.read_table(timestamps)["timestamp"].to_numpy()
@@ -53,6 +64,14 @@ def export(episode, output, *, selected=None, start=0, end=None, labels=False, s
         raise ValueError("Requested RGB frames outside stream")
     from vive_correct.data.layout import data_directory
 
+    from ego_data.rgb_projection import RGBProjection
+    from vive_correct.estimate.geometry import VIDEO_KEY
+
+    projection = RGBProjection(
+        episode, times, camera_calibration, rectified=timestamps.stem == VIDEO_KEY
+    )
+    projection.load_hands(hand_points_dir or data_directory(episode))
+    print(f"RGB hand projection: {projection.reason or 'available'}", flush=True)
     source = data_directory(episode) / "observation.hand_skeleton.parquet"
     raw = pq.read_table(source)
     (hand_times, points), diagnostics = normalize_tracking(
@@ -65,6 +84,9 @@ def export(episode, output, *, selected=None, start=0, end=None, labels=False, s
     rr.init(episode.name + "_manus_rgb")
     rr.save(str(output))
     message = f"RGB source: {timestamps.stem}.\nRGB + original MANUS local nodes. No depth registration or anatomical fit. Group indices are not hand-side labels."
+    message += "\nWorld hand joints are projected when rectified intrinsics and head/camera pose are available. Projection uses the configured camera mount; local MANUS nodes are not projected."
+    if projection.reason:
+        message += "\nProjection unavailable: " + projection.reason
     if status:
         message += "\n" + json.dumps(status, ensure_ascii=False)
     rr.log("notes", rr.TextDocument(message), static=True)
@@ -94,7 +116,9 @@ def export(episode, output, *, selected=None, start=0, end=None, labels=False, s
             ts = float(times[index])
             rr.set_time_sequence("frame", index)
             # Frame indexing remains available even if a video timestamp is corrupt.
-            rr.log("rgb", rr.Image(frame.to_ndarray(format="rgb24")).compress(jpeg_quality=85))
+            image = frame.to_ndarray(format="rgb24")
+            rr.log("rgb", rr.Image(image).compress(jpeg_quality=85))
+            projection.log_source(index, ts, image.shape)
             value, delta = sample_nearest((hand_times, points), ts, 0.005)
             value = value.reshape(50, 3)
             log_nodes(value, labels=labels)
@@ -115,9 +139,11 @@ def export(episode, output, *, selected=None, start=0, end=None, labels=False, s
         frames=len(seen),
         selected_frames=sorted(seen),
         mode="rgb_manus_only",
+        frame_timeline="rectified_rgb" if timestamps.stem == VIDEO_KEY else timestamps.stem,
         registered=False,
         timestamp_diagnostics=diagnostics,
         hand_sync=sync,
+        hand_projection=projection.report(),
         hand_side_verification=status,
         skipped_missing_head_frames=[],
         status=message,

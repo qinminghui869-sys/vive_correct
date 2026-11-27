@@ -20,11 +20,7 @@
 
 ```json
 {
-  "axis_angles_deg": [
-    0,
-    0,
-    0
-  ],
+  "axis_angles_deg": [0, 0, 0],
   "axis_convention": "intrinsic_XYZ_degrees"
 }
 ```
@@ -105,28 +101,12 @@
   "side": "left",
   "frame_index": 100,
   "quad": [
-    [
-      120,
-      262
-    ],
-    [
-      180,
-      262
-    ],
-    [
-      180,
-      298
-    ],
-    [
-      120,
-      298
-    ]
+    [120, 262],
+    [180, 262],
+    [180, 298],
+    [120, 298]
   ],
-  "axis_angles_deg": [
-    0,
-    0,
-    0
-  ],
+  "axis_angles_deg": [0, 0, 0],
   "axis_convention": "intrinsic_XYZ_degrees"
 }
 ```

@@ -1,11 +1,27 @@
 """Open completed recordings without running repair or export again."""
 
 import argparse
+import ctypes
+import errno
 import json
 from pathlib import Path
 import shutil
 import subprocess
 import sys
+
+
+def file_watchers_exhausted():
+    """Rerun's Linux file reader needs an inotify instance, even for saved RRDs."""
+    if not sys.platform.startswith("linux"):
+        return False
+    import os
+
+    libc = ctypes.CDLL(None, use_errno=True)
+    descriptor = libc.inotify_init1(os.O_CLOEXEC)
+    if descriptor < 0:
+        return ctypes.get_errno() in (errno.EMFILE, errno.ENFILE, errno.ENOSPC)
+    os.close(descriptor)
+    return False
 
 
 def recordings_at(path):
@@ -42,7 +58,17 @@ def launch(recordings, *, log_path=None):
     command = [executable, "--bind", "127.0.0.1", "--port", "0"]
     if sys.platform.startswith("linux"):
         command += ["--renderer", "vulkan"]
-    command += [str(p) for p in recordings]
+    if file_watchers_exhausted():
+        print("Linux file watchers exhausted; loading RRD via a local HTTP server.", flush=True)
+        command = [
+            sys.executable,
+            "-m",
+            "vive_correct.export.viewer_http",
+            json.dumps(command),
+            *map(str, recordings),
+        ]
+    else:
+        command += [str(p) for p in recordings]
     with log_path.open("a") as log:
         viewer = subprocess.Popen(
             command,

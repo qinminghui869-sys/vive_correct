@@ -8,20 +8,27 @@ python3 -m vive_correct view outputs/cv
 python3 -m vive_correct view /path/to/recording.rrd
 ```
 
-`view` 只打开已有录制。目录入口读 `rerun/manifest.json`；审核录制在 `repairs/<运行>/rerun/`。青色是左手，粉色是右手，灰色是修正前骨架。生成步骤见 [导出与查看](../docs/review_rebuild.md#export-and-view)。
+`view` 只打开已有录制。目录入口读 `rerun/manifest.json`；审核录制在 `repairs/<运行>/rerun/`。左右手以实体名称为准，灰色用于修正前对照。生成步骤见 [导出与查看](../docs/review_rebuild.md#export-and-view)。
 
 <a id="rrd-inputs"></a>
 
-## 完整 RRD 的输入
+## 导出模式与输入
 
-已有深度视频后无需重新计算双目深度，但仅有深度视频不足以完整渲染，还需要：
+`raw` 和 `repair` 自动选择下列模式；`--rgb-only` 可在 `raw` 中强制使用 RGB：
 
-- 深度时间戳 Parquet、`valid_mask_ffv1.mkv` 有效掩码及深度元数据。
-- 矫正左目 RGB 视频，用于着色和图像显示。
-- 头部、左右腕部位姿及手点；审核导出使用同一份修正 Parquet。
-- `eye_gaze`、`eye_rgb` 视频及其时间戳，供当前渲染器的眼动视图读取。
+| 输入情况 | 显示内容 | 时间线 / JSON mode |
+| --- | --- | --- |
+| 深度、内参、掩码齐全 | RGB、有效点云、世界坐标手点 | 深度 / `depth_masked` |
+| 深度和内参齐全，缺掩码 | RGB、按距离过滤的预览点云、世界坐标手点 | 深度 / `depth_unmasked_preview` |
+| 缺深度视频、时间戳或可用参数 | RGB 叠加手关节点与骨架；保留原有 3D 手部视图 | RGB / `rgb_manus_only` 或 `rectified_rgb_corrected_wrists` |
 
-世界对齐还依赖 [相机到头部外参](../calibrations/README.md) 和头部欧拉角约定。缺外参的独立查看模式不能视为点云与跟踪数据已对齐。审核导出在深度输入不足时回退到 RGB；选中的深度元数据损坏时不静默切换文件。
+`raw` 使用原始手点；`repair` 使用审核后修正 Parquet，保留修正前后对照，不重复施加矫正。模式不改变源数据或审核状态。支持多 episode、逐条标定和实际分辨率；含中文、空格或 `+` 的路径须加双引号。
+
+点云需要深度视频及时间戳、矫正左目 RGB、内参和深度尺度。当前世界视图还读取头部、腕部、手点以及眼动数据（`eye_gaze`、`eye_rgb` 视频及时间戳）。缺掩码时仅过滤无效值和距离范围，日志及录制注明预览：有损深度中的无效区域不能据此可靠恢复。此兼容仅用于 RRD，审核深度精修仍要求原始掩码。
+
+RGB 叠加需要矫正左目内参、头部位姿、相机到头部外参及世界坐标 21 关节。关节点经世界→相机→像素投影，连接可见骨节；相机后方、画面外及缺测点不显示，上一帧叠加会清除。只有局部 MANUS 节点或非矫正 RGB 时，不猜测映射，原因写入 JSON 的 `hand_projection`。外参仍使用指定的安装标定，精度见 [相机参数](../calibrations/README.md)。
+
+录制位置与发布流程见 [导出与查看](../docs/review_rebuild.md#export-and-view)。`render.log` 记录实际模式及时间线；同名 JSON 中的 `mode`、`frame_timeline`、`validity_mask` 或 `hand_projection` 用于排错。
 
 <a id="depth-metadata"></a>
 
@@ -32,7 +39,9 @@ python3 -m vive_correct view /path/to/recording.rrd
 1. `episode_000000_meta.json`
 2. `fast_foundation_stereo_video_meta.json`
 
-渲染读取五个数值：
+独立元数据存在时优先读取，损坏则明确报错。仅当上述文件均不存在，RRD 渲染从 `meta/info.json` 的深度特征读取毫米单位、无效值和最大距离，从逐 episode（其次根目录）`rectify_params.yaml` 读取内参，并校验分辨率。不推测缺失单位或内参。
+
+旧版元数据读取：
 
 - `intrinsics.left.fx/fy/cx/cy`：焦距和主点，单位像素，须对应实际深度分辨率，用于反投影、投影和相机视锥。
 - `max_depth_m`：有效深度上限，单位米。
@@ -45,25 +54,40 @@ X = (u − cx) Z / fx
 Y = (v − cy) Z / fy
 ```
 
-排除零深度和掩码无效区域。`depth_unit`、`depth_encoding`、`invalid_value`、`scale` 不会自动改变解码尺度。
+排除零深度、声明的无效值及超出上限的深度；有掩码时再排除掩码无效区域。旧版按毫米解码，新格式显式校验毫米单位。
+
+<a id="raw-export"></a>
 
 ## 原始 MANUS 查看
 
-```bash
-python3 open_manus.py /path/to/episode
-```
-
-显示原始局部骨架、RGB 和可用的世界骨架／点云，不应用标签校准。需要重建手点或指定帧时：
+无需选帧或人工审核。在仓库根目录执行，替换单条 episode 路径：
 
 ```bash
-python3 -m vive_correct raw \
-  --dataset /path/to/episode --out outputs/manus_preview \
-  --manus --repair-hands --show-labels --frames 90 300 900 --open-rerun
+EPISODE="/path/to/dataset/data/chunk-000/episode_000004"
+OUT="outputs/episode_000004_raw"
+python3 -m vive_correct raw --dataset "$EPISODE" --out "$OUT" --manus --open-rerun
 ```
 
-省略 `--repair-hands` 直接读取已有 21 关节；`--rgb-only` 仅查看 RGB 与原始 MANUS。缺深度自动回退，侧别不确定时标记 `unverified_source_preview`。
+单条旧数据的路径规则见 [输入要求](../vive_correct/README.md#inputs)。省略 `--frames` 导出整条；`--open-rerun` 在成功后打开查看器。之后可单独查看：
 
-输出为 `raw.rrd`、`repaired.rrd` 或 `unverified.rrd` 及同名 JSON。21 关节编号：腕 0，拇指 1–4，食指 5–8，中指 9–12，无名指 13–16，小指 17–20。局部骨架转换与安装假设见 [手部流程](../docs/hand_pipeline.md#manus-reconstruction)。
+```bash
+python3 -m vive_correct view "$OUT/raw.rrd"
+```
+
+| 可选参数 | 用途 |
+| --- | --- |
+| `--frames 30 31 32` | 只导出指定帧，帧号从 0 开始 |
+| `--rgb-only` | 强制 RGB 手点叠加，不生成点云 |
+| `--manus` | 在点云模式中额外显示 50 个原始局部节点 |
+| `--show-labels` | 显示关节编号 |
+| `--repair-hands` | 核查 MANUS 分组并尝试重建 21 关节，另存结果 |
+| `--initial-mount FILE` | 指定相机到头部外参 |
+
+默认输出 `raw.rrd` 和同名 JSON；使用 `--repair-hands` 后，根据侧别核查结果输出 `repaired.rrd` 或 `unverified.rrd`。导出日志为 `render.log`，查看器日志为 `viewer.log`。重新导出时可使用新输出目录保留旧录制。
+
+`raw` 不应用审核后的 VIVE 矫正；矫正结果使用 [repair 流程](../docs/review_rebuild.md#export-and-view)。饮料店 `pour_beverage` 格式从 `meta/info.json` 和逐 episode 标定读取参数，缺掩码时生成预览点云。已有 RRD 不随代码更新，需重新导出。
+
+21 关节编号：腕 0，拇指 1–4，食指 5–8，中指 9–12，无名指 13–16，小指 17–20。局部骨架转换与安装假设见 [手部流程](../docs/hand_pipeline.md#manus-reconstruction)。快捷入口 `python3 open_manus.py /path/to/episode` 调用同一原始查看流程。
 
 ## 同步与独立工具
 
