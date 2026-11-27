@@ -56,11 +56,9 @@ def corner_correction(pose, camera, convention="label_z_normal"):
 
 
 def prepare_pose(pose, camera, choice):
-    """Anchor the PnP depth on the measured quadrilateral's center ray."""
+    """Keep PnP geometry only for direction suggestions; position is measured downstream."""
     pose["pnp_origin_camera_m"] = pose["origin_camera_m"]
-    ray = np.linalg.solve(camera.K, [*pose["label_center_px"], 1.0])
     pose.update(
-        origin_camera_m=(ray * (pose["origin_camera_m"][2] / ray[2])).tolist(),
         axis_angles_deg=axis_angles(choice).tolist(),
         axis_convention=CONVENTION,
     )
@@ -128,9 +126,7 @@ def preview(episode, side, choice, calibration):
             dict(frame_index=frame, timestamp_s=float(times[frame]), stickers={side: pose})
         ],
     )
-    alignment = build_alignment(
-        Path(episode), report, calibration, refine_depth=True, require_bilateral=False
-    )
+    alignment = build_alignment(Path(episode), report, calibration, require_bilateral=False)
     result = enrich_pose(pose, alignment["samples"][0], camera.K)
     try:
         from vive_correct.review.review_io import read_json

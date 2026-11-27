@@ -2,7 +2,7 @@ import json
 from pathlib import Path
 import tempfile
 import unittest
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 import numpy as np
 import pyarrow as pa
@@ -82,21 +82,22 @@ class DepthMetadataTests(unittest.TestCase):
             with self.subTest(name=name):
                 path = self.ann / name
                 path.write_text(json.dumps(self.meta))
-                containers = []
-                for value in (400, 255):
-                    frame = MagicMock()
-                    frame.to_ndarray.return_value = np.full((80, 100), value, np.uint16)
-                    packet = MagicMock()
-                    packet.pts = packet.dts = 0
-                    packet.is_keyframe = True
-                    container = MagicMock()
-                    opened_container = container.__enter__.return_value
-                    opened_container.streams.video = [MagicMock()]
-                    opened_container.demux.return_value = [packet]
-                    opened_container.decode.return_value = [frame]
-                    containers.append(container)
-                with patch("ego_data.depth_targets.av.open", side_effect=containers):
+                for asset in (
+                    self.ann / "valid_mask_ffv1.mkv",
+                    self.episode / "videos/chunk-000" / DEPTH_KEY / "episode_000000.mp4",
+                    self.episode
+                    / "videos/chunk-000/observation.images.headband_left_rgb_rectified/episode_000000.mp4",
+                ):
+                    asset.parent.mkdir(parents=True, exist_ok=True)
+                    asset.touch()
+                with patch(
+                    "ego_data.depth_origin.decoded_frame",
+                    side_effect=[
+                        np.full((80, 100), 400, np.uint16),
+                        np.full((80, 100), 255, np.uint8),
+                    ],
+                ):
                     result = refine_targets(self.episode, report)[(0, "left")]
-                self.assertEqual(result["status"], "depth_plane_refined")
+                self.assertEqual(result["status"], "depth_pixel_measured")
                 np.testing.assert_allclose(result["origin_camera_m"], [0, 0, 0.4])
                 path.unlink()

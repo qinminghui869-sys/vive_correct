@@ -193,7 +193,7 @@ def repair_dataset(
                     folder = run / f"{index:04d}_{episode.name}"
                     report_path = folder / "observations.json"
                     atomic_json(report_path, report)
-                    alignment = build_alignment(episode, report_path, mount_path, refine_depth=True)
+                    alignment = build_alignment(episode, report_path, mount_path)
                     alignment_path = folder / "wrist_alignment.json"
                     atomic_json(alignment_path, alignment)
                     files = write_corrected_wrists(episode, folder / "corrected", alignment)

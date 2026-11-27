@@ -53,11 +53,13 @@ def source_signature(episode):
     originals = original_files(episode)
     result = {}
     root = dataset_root(episode) if is_indexed_episode(episode) else episode
-    folders = ("data", "videos", "calibrations", "annotation")
+    folders = ("data", "videos", "calibrations", "annotation", "meta")
     stem = episode_stem(episode)
     for folder in folders:
         base = root / folder
         for p in sorted(base.rglob("*")) if base.is_dir() else []:
+            if folder == "meta" and p.name != "info.json":
+                continue
             if not p.is_file() or p.name.endswith((".bak", ".restore")):
                 continue
             if is_indexed_episode(episode) and folder in ("data", "videos", "annotation"):

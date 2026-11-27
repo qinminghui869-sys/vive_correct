@@ -353,6 +353,10 @@ def main():
     wrist_calibration = (
         json.loads(args.wrist_calibration.read_text()) if args.wrist_calibration else {}
     )
+    if any("origin_camera_m" in sample for sample in wrist_calibration.get("samples", [])):
+        from ego_data.vive_origin_alignment import require_depth_alignment
+
+        require_depth_alignment(wrist_calibration)
     if wrist_calibration:
         if (
             wrist_calibration.get("episode")

@@ -30,7 +30,7 @@ def check_dependencies(open_viewer=False):
 def export_recordings(work, calibration, *, open_viewer=False):
     import pyarrow.parquet as pq
     from ego_data.render_inputs import depth_available
-    from ego_data.vive_origin_alignment import build_alignment
+    from ego_data.vive_origin_alignment import build_alignment, require_depth_alignment
     from vive_correct.estimate.geometry import VIDEO_KEY
 
     check_dependencies(open_viewer)
@@ -62,6 +62,7 @@ def export_recordings(work, calibration, *, open_viewer=False):
                 if digest(prepared) != entry["alignment_sha256"]:
                     raise ValueError("Prepared alignment hash mismatch")
                 alignment = json.loads(prepared.read_text())
+                require_depth_alignment(alignment)
                 if (
                     alignment["source_report_sha256"] != entry["report_sha256"]
                     or Path(alignment["episode"]).resolve() != episode
@@ -69,7 +70,7 @@ def export_recordings(work, calibration, *, open_viewer=False):
                 ):
                     raise ValueError("Prepared alignment inputs changed; run repair again")
             else:
-                alignment = build_alignment(episode, report, calibration, refine_depth=True)
+                alignment = build_alignment(episode, report, calibration)
             alignment_path = folder / "wrist_alignment.json"
             alignment_path.write_text(json.dumps(alignment, ensure_ascii=False, indent=2) + "\n")
             reviewed_data = entry.get("reviewed_data")

@@ -79,10 +79,12 @@
 
 ### 校准与位姿字段
 
-- `model="wrist_local_rigid"`：`offset_local_m` 为腕部本地平移，`rotation_local` 为右乘本地旋转。`offset_m` 仅是参考时刻世界偏移，不可作为整段固定平移。历史 `model="world"` 走兼容路径。
-- `pnp_origin_camera_m`：PnP 原始中心；`origin_camera_m`：沿标签中心射线并经可用深度精修后的中心。
-- `rotation_camera_label`：用于中心求解的 PnP 标签平面旋转，不等于设备物理方向。
+- `model="wrist_local_rigid"`：`offset_local_m` 为腕部本地平移，`rotation_local` 为右乘本地旋转。`offset_m` 仅是参考时刻世界偏移，不可作为整段固定平移。`model="world"` 表示固定世界平移；变换模型与原点来源独立，不能据此判断原点是否来自深度。
+- `pnp_origin_camera_m`：仅供方向建议的历史 PnP 中心；`origin_camera_m`：由二维原点和同步深度反投影得到的相机坐标。
+- `rotation_camera_label`：用于方向建议的 PnP 标签平面旋转，不等于设备物理方向。
 - `T_camera_local`、`axis_projection`、`axis_length_m`、`camera_K`：最终姿态、投影、绘图轴长（0.04 m）与内参。投影含 `origin` 和按 X/Y/Z 排列的 `endpoints`；不可投影点为 `null`。
+- `origin_method="depth_pixel"`：原点来自同步中心像素深度；消费校准时拒绝旧报告位置来源。
+- `depth_refinement.status="depth_pixel_measured"`：记录二维原点、采样像素、原始毫米深度、深度帧号与时间差；无掩码标记 `unmasked_depth_preview`。世界原点为 `target_world_m`，通过相机外参和同步头部位姿转换。
 - `calibration_sample`：同步源头部与腕部位姿、`T_world_camera`、`rotation_camera_source`、`rotation_camera_corrected`、本地校准和深度结果。
 - `local_axes_convention="source_wrist_with_local_calibration"`、`orientation_status="human_axis_review"`：源腕部叠加人工本地旋转。`physical_axes_verified=false` 表示未进行独立物理标定。
 

@@ -39,23 +39,47 @@ python3 -m vive_correct rebuild --out outputs/ks3 --in-place
 
 单条加 `--episode /path/to/episode`。`review`、`repair`、`rebuild` 若用了自定义外参，必须传同一个 `--initial-mount FILE`。
 
-每条数据只改该条数据目录下的六个文件。单条旧数据在 `data/chunk-000/episode_000000/`；多条数据集在 `data/chunk-000/episode_NNNNNN/`：
+两个源数据写回入口共用以下字段范围。单条旧数据位于 `data/chunk-000/episode_000000/`；多条数据集使用对应 `episode_NNNNNN/`。
 
-- `observation.left_wrist_pose.parquet`、`observation.right_wrist_pose.parquet`
-- `action.parquet`、`observation.state.parquet` 里的左右腕部字段
-- `observation.hand_left_points.parquet`、`observation.hand_right_points.parquet`
+| 文件 | 修改字段 |
+| --- | --- |
+| `observation.left_wrist_pose.parquet`、`observation.right_wrist_pose.parquet` | 世界 XYZ、审核旋转对应的姿态角 |
+| `observation.hand_left_points.parquet`、`observation.hand_right_points.parquet` | 21 个关节点的世界 XYZ |
+| `action.parquet`、`observation.state.parquet` | 左右腕部 XYZ 和姿态角 |
 
-保留行数、时间戳、字段类型、Arrow 元数据和非目标字段。缺测或同步失败的坐标组保持原值，并记录跳过数量。不修改 `observation.hand_skeleton.parquet`。
+保留头部位姿、手指屈伸值、时间戳、编号、行序、字段类型及元数据。不修改 `observation.hand_skeleton.parquet`。缺测组处理见 [字段保真规则](hand_pipeline.md#synchronization)。
 
 `--in-place` 校验通过后直接替换这六个源文件，并在同一事务里更新 [数据集元数据](#dataset-metadata)。源目录不写 `.parquet.bak` 或 `.vive_rebuild/`。
 
 原始文件留在首次执行的 `<out>/rebuild_state/<样本>/baseline/`，并由 `outputs/rebuild_index.json` 登记。再次重建仍用这份基线。失败或中断会恢复六个源文件和已改的元数据。不要删除 `rebuild_state/` 或索引来绕过校验。
 
+<a name="depth-origin-writeback"></a>
+
+## 用深度原点重新矫正并写回
+
+此脚本直接更新源数据的六个 Parquet，不提供预览、RRD 导出或另存修正文件模式。输入为源数据集及保存了双手通过审核记录和原始基线的历史过程目录：
+
+```bash
+python3 scripts/apply_depth_origin.py \
+  --dataset "/path/to/dataset" \
+  --process-out "outputs/existing_review"
+```
+
+**执行即覆盖源文件。** 默认处理全部 episode；单条增加 `--episode episode_000004`，可重复指定。路径含中文、空格或 `+` 时加引号。
+
+脚本读取 `features/**/approval.json`、对应 `approved/` 快照、`rebuild_manifest.json` 和 `rebuild_state/` 原始基线，兼容历史机器路径迁移。它复用审核选择，按[深度反投影规则](hand_pipeline.md)重新计算，不创建新的审核通过记录。缺少原始基线、有效深度或审核材料时停止。
+
+写回字段、基线和统计更新与 [原地重建](#rebuild-and-backup) 一致。
+
+所有选定条目计算通过后才写回，临时文件自动清理。仅在 `<process-out>/depth_origin_runs/` 保留必要执行记录，原始备份与恢复日志继续使用原有 `rebuild_state/`，常规索引会登记该位置。重复执行从原始基线计算，不叠加矫正。
+
+每条内部失败回滚并停止后续写入；跨 episode 不保证原子性，已完成条目保留在执行记录中。发现源数据被外部修改时拒绝覆盖。进程中断的事务可通过现有 `source_data.recover(episode)` 恢复；不要删除基线或索引绕过校验。无掩码深度仍标记 `unmasked_depth_preview`，不代表物理精度已经验证。
+
 <a name="dataset-metadata"></a>
 
-### 数据集元数据
+## 数据集元数据
 
-`--in-place` 成功后，在同一次事务里更新数据集 `meta/`。失败或中断会把这两份文件和六个 Parquet 一起恢复。
+`rebuild --in-place` 和深度原点写回脚本均在六文件事务内更新数据集 `meta/`。失败或中断会把这两份文件和六个 Parquet 一起恢复。
 
 - `episodes_stats.jsonl`：重算该条的 `observation.left_wrist_pose`、`observation.right_wrist_pose`、`action`、`observation.state`、`observation.hand_left_points`、`observation.hand_right_points`。每项重算 `min`、`max`、`mean`、`std` 和 `count`。计算方式沿用这一项原来的数值，未改动的列保持原统计。其他特征不变。
 - `readme.json`：`size_bytes` 加上这六个文件的大小变化。`file_count`、`frame_count` 和其他字段不变。
@@ -82,6 +106,7 @@ python3 -m vive_correct review --out outputs/ks3 --port 18775 \
 - `rejected_episodes.json`：整条不通过。没有排除记录时可以不存在。
 - `approved/<版本>/`：审核依据和按需生成的修正 Parquet，见 [依据包](observations_schema.md#approval-bundle)。
 - `repair_manifest.json`、`rebuild_manifest.json`：导出和重建结果。
+- `depth_origin_runs/*.json`：深度原点直接写回记录，包括逐条状态、来源和文件哈希。
 - `repairs/<运行>/rerun/`：录制、统计和 `render.log`。
 
 常见问题：
@@ -89,6 +114,7 @@ python3 -m vive_correct review --out outputs/ks3 --port 18775 \
 - **列表一直等待**：选帧和审核的 `--out` 是否相同，并看选帧异常。
 - **有标签却无候选**：按 [漏检排查](cv_detection.md#detection-troubleshooting) 换帧或手工补标。
 - **依据过期或版本冲突**：重新加载后再审。不要手改版本或哈希。
+- **原点深度不可用**：核对参考帧中心像素、毫米深度、内参及 RGB/深度时间差。当前原点不再回退到 PnP；可选择有有效深度的参考帧重新审核。
 - **重投影或同步失败**：按提示核对帧、四角和姿态时间戳。不要放宽阈值强行通过。
 - **导出失败**：先看 `repair_manifest.json` 的错误，再看对应 `render.log` 中的时间线、帧数及异常。仅成功完成的临时录制才发布为 `recording.rrd`；排队不等于完成。
 - **窗口出现但文件加载失败**：查看 `viewer.log`。Linux 的 `inotify` 实例耗尽会导致 `failed to create retryable file reader`；`view` 会自动改用仅监听 `127.0.0.1` 的 HTTP 读取，关闭窗口后自动停止服务，无需重新导出。

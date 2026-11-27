@@ -271,8 +271,8 @@ class AxisTests(unittest.TestCase):
         self.set_rotations("left_wrist", [[0, 0, 0]] * 4)
         target = [-0.1, 0.05, 0.6]
         with patch(
-            "ego_data.depth_targets.refine_targets",
-            return_value={(0, "left"): dict(status="depth_plane_refined", origin_camera_m=target)},
+            "ego_data.depth_origin.measured_targets",
+            return_value={(0, "left"): dict(status="depth_pixel_measured", origin_camera_m=target)},
         ):
             result = preview(self.episode, "left", choice, self.mount)
         np.testing.assert_allclose(result["origin_camera_m"], target)

@@ -19,12 +19,22 @@ def file_stamp(path):
 
 
 def source_stamp(episode):
+    from vive_correct.data.layout import dataset_root, episode_stem, is_indexed_episode
+
     episode = Path(episode)
+    root, stem = dataset_root(episode), episode_stem(episode)
     return tuple(
         file_stamp(p)
-        for folder in ("data", "videos", "calibrations", "annotation")
-        for p in sorted((episode / folder).rglob("*"))
-        if p.is_file() and not p.name.endswith((".lock", ".restore"))
+        for folder in ("data", "videos", "calibrations", "annotation", "meta")
+        for p in sorted((root / folder).rglob("*"))
+        if p.is_file()
+        and not p.name.endswith((".lock", ".restore"))
+        and (
+            not is_indexed_episode(episode)
+            or folder in ("calibrations", "meta")
+            or p.stem == stem
+            or stem in p.parts
+        )
     )
 
 

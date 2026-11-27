@@ -8,7 +8,7 @@
 
 ```mermaid
 flowchart LR
-    A[人工四角与旋转角] --> B[PnP 与可用深度精修]
+    A[人工四角与旋转角] --> B[二维原点与同步深度反投影]
     B --> C[相机外参与姿态同步]
     C --> D[每侧本地平移与旋转]
     E[原始腕部与已有手点] --> F[六文件刚性校准]
@@ -41,7 +41,26 @@ q′(t) = p′(t) + R(t)C R(t)ᵀ(q(t) − p(t))
 
 已有 `observation.hand_{left,right}_points.parquet` 是世界坐标，不能再次按局部点变换到世界系，也不能靠交换文件名修正侧别。RRD 读取共用修正文件，覆盖后从输出目录里的原始基线读取对照。
 
-深度精修要求 RGB 与深度时间差不超过 5 ms；有效点、覆盖率或平面残差检查失败时保留 PnP，记录 `unverified_pnp_preview`。骨架与点云仅在同一坐标系叠加，不将关节吸附到最近点云。
+<a name="depth-origin"></a>
+
+## 二维原点到世界坐标
+
+审核、独立校准命令、AI 消融评估和写回脚本共用 `depth_pixel` 流程：
+
+```text
+二维原点 (u, v) + 相机深度 Zc → 相机 XYZ → 头部位姿与外参 → 世界 XYZ
+
+Zc = depth_mm / 1000
+Xc = (u − cx) Zc / fx
+Yc = (v − cy) Zc / fy
+p_world = T_world_head × T_head_camera × [Xc, Yc, Zc, 1]ᵀ
+```
+
+二维原点取标签四角对角线交点；深度取最近同步帧的最近像素（`floor(坐标 + 0.5)`），反投影沿原始二维坐标射线计算。RGB 与深度时间差不得超过 5 ms，内参和分辨率必须一致。相机光轴深度 Zc 不等于世界 Z。
+
+无有效深度、同步超限或掩码拒绝时失败，不回退到 PnP 或深度平面拟合。缺掩码时标记 `unmasked_depth_preview`，有损深度的有效性需人工确认。PnP 仅用于四角几何检查和方向建议。
+
+旧原点校准需重新生成后才能用于修正；历史依据迁移见 [深度原点写回](review_rebuild.md#depth-origin-writeback)。原始 RRD 查看和 PnP 诊断报告不执行源数据矫正。世界坐标骨架与点云直接叠加，不将关节吸附到最近点云。
 
 <a name="manus-reconstruction"></a>
 

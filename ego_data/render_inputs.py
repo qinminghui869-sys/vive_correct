@@ -1,4 +1,4 @@
-"""Rendering-only depth compatibility; estimation keeps its strict mask contract."""
+"""Resolve depth metadata for rendering and measured-center origin calculation."""
 
 import json
 from pathlib import Path
@@ -22,7 +22,7 @@ def depth_input(episode):
     """Return validated rendering parameters, or None for missing depth inputs.
 
     An existing malformed metadata file is an error, never a fallback trigger.
-    Missing masks permit visualization only and never create source annotations.
+    Missing masks are explicitly marked as previews and never create source annotations.
     """
     episode = Path(episode)
     ann = annotation_dir(episode, DEPTH_KEY)

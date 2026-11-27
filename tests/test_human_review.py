@@ -10,6 +10,7 @@ from tempfile import TemporaryDirectory
 from time import perf_counter
 from unittest.mock import patch
 
+import av
 import cv2
 import numpy as np
 import pyarrow as pa
@@ -71,6 +72,34 @@ def make_fixture(root):
     data.mkdir(parents=True)
     times = np.arange(4) / 30
     pq.write_table(pa.table({"timestamp": times}), episode / TIMESTAMP_SUFFIX)
+    # Measured-depth review uses real lossless pixels, independent of PnP translation.
+    depth_key = "observation.images.depth_headband_left_rectified"
+    pq.write_table(pa.table({"timestamp": times}), data / f"{depth_key}.parquet")
+    depth_video = episode / "videos/chunk-000" / depth_key / "episode_000000.mp4"
+    depth_video.parent.mkdir(parents=True)
+    with av.open(str(depth_video), "w", format="matroska") as container:
+        stream = container.add_stream("ffv1", rate=30)
+        stream.width, stream.height, stream.pix_fmt = 640, 400, "gray16le"
+        for _ in times:
+            frame = av.VideoFrame.from_ndarray(
+                np.full((400, 640), 500, np.uint16), format="gray16le"
+            )
+            for packet in stream.encode(frame):
+                container.mux(packet)
+        for packet in stream.encode():
+            container.mux(packet)
+    atomic_json(
+        episode / "meta/info.json",
+        dict(
+            features={
+                depth_key: dict(
+                    shape=[400, 640, 1],
+                    depth_storage=dict(unit="millimeter", max_depth_m=4, invalid_value=0),
+                )
+            }
+        ),
+    )
+
     for side, x in (("head", 0.0), ("left_wrist", 1.0), ("right_wrist", 2.0)):
         fields = dict(
             timestamp=times,
@@ -203,7 +232,7 @@ class ReviewTests(unittest.TestCase):
         atomic_json(report_path, report)
         alignment = build_alignment(self.episode, report_path, self.mount)
         self.assertEqual({s["source_rgb_frame"] for s in alignment["samples"]}, {1, 2})
-        self.assertEqual(alignment["alignment_timeline"], "rectified_rgb")
+        self.assertEqual(alignment["alignment_timeline"], "depth")
 
     def test_rejected_drafts_and_missing_candidates_can_be_saved(self):
         path = self.store.path(0)

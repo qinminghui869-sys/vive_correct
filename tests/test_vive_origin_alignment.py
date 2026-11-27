@@ -4,6 +4,7 @@ import json
 from pathlib import Path
 from tempfile import TemporaryDirectory
 import unittest
+from unittest.mock import patch
 
 import numpy as np
 import pyarrow as pa
@@ -57,6 +58,20 @@ class OriginAlignmentTests(unittest.TestCase):
             )
         )
 
+        # Geometry unit tests isolate depth decoding; real depth is tested in test_depth_origin.
+        self.depth_patch = patch(
+            "ego_data.depth_origin.measured_targets",
+            side_effect=lambda ep, report: {
+                (o["frame_index"], side): dict(
+                    status="depth_pixel_measured", origin_camera_m=[0.1, 0.2, 0.4]
+                )
+                for o in report["observations"]
+                for side in o["stickers"]
+            },
+        )
+        self.depth_patch.start()
+        self.addCleanup(self.depth_patch.stop)
+
     def build(self):
         return build_alignment(self.episode, self.report, self.calibration)
 
@@ -67,16 +82,10 @@ class OriginAlignmentTests(unittest.TestCase):
         for sample in result["samples"]:
             np.testing.assert_allclose(sample["target_world_m"], [2.1, 1.2, 0.4])
 
-    def test_missing_depth_uses_rectified_rgb_timeline_without_fake_depth(self):
-        (
-            self.episode
-            / "data/chunk-000/episode_000000/observation.images.depth_headband_left_rectified.parquet"
-        ).unlink()
-        result = self.build()
-        self.assertEqual(result["alignment_timeline"], "rectified_rgb")
-        self.assertEqual(result["samples"][0]["frame"], 1)
-        self.assertFalse(result["depth_refinement_enabled"])
-        np.testing.assert_allclose(result["wrists"]["left"]["offset_m"], [-17.9, 1.2, 0.4])
+    def test_missing_depth_fails_without_report_fallback(self):
+        self.depth_patch.stop()
+        with self.assertRaisesRegex(ValueError, "PnP fallback"):
+            self.build()
 
     def test_other_episode_is_rejected(self):
         self.payload["episode"] = str(self.episode.parent / "other")
@@ -110,12 +119,42 @@ class OriginAlignmentTests(unittest.TestCase):
         original = self.report.read_bytes()
         frame = self.payload["observations"][0]["frame_index"]
         refined = {
-            (frame, side): {"status": "depth_plane_refined", "origin_camera_m": [0, 0, 0.2]}
+            (frame, side): {"status": "depth_pixel_measured", "origin_camera_m": [0, 0, 0.2]}
             for side in ("left", "right")
         }
-        with patch("ego_data.depth_targets.refine_targets", return_value=refined):
-            result = build_alignment(self.episode, self.report, self.calibration, refine_depth=True)
+        with patch("ego_data.depth_origin.measured_targets", return_value=refined):
+            result = build_alignment(self.episode, self.report, self.calibration)
         self.assertEqual(self.report.read_bytes(), original)
         self.assertTrue(result["depth_refinement_enabled"])
         for sample in result["samples"]:
             self.assertEqual(sample["origin_camera_m"], [0, 0, 0.2])
+
+    def test_saved_pnp_origin_is_rejected(self):
+        from ego_data.vive_origin_alignment import require_depth_alignment
+
+        result = self.build()
+        require_depth_alignment(result)
+        result["origin_method"] = "report_position"
+        with self.assertRaisesRegex(ValueError, "旧原点校准"):
+            require_depth_alignment(result)
+
+    def test_standalone_command_uses_depth_without_switch(self):
+        from ego_data.vive_origin_alignment import main
+
+        output = self.episode / "alignment.json"
+        with patch(
+            "sys.argv",
+            [
+                "alignment",
+                "--episode",
+                str(self.episode),
+                "--report",
+                str(self.report),
+                "--calibration",
+                str(self.calibration),
+                "--output",
+                str(output),
+            ],
+        ):
+            main()
+        self.assertEqual(json.loads(output.read_text())["origin_method"], "depth_pixel")

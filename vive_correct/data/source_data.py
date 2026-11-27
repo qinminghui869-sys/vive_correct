@@ -4,6 +4,7 @@ The dataset directory only receives the six replaced Parquets. Baseline copies a
 the crash journal live under the first ``--out`` that performed an in-place rebuild.
 """
 
+import errno
 import fcntl
 import hashlib
 import os
@@ -39,6 +40,21 @@ def copy_file(source, destination, *, exclusive=False):
         dst.flush()
         os.fsync(dst.fileno())
     shutil.copystat(source, destination)
+
+
+def publish_file(source, target):
+    """Publish atomically even when the output journal and dataset are on different mounts."""
+    try:
+        os.replace(source, target)
+    except OSError as error:
+        if error.errno != errno.EXDEV:
+            raise
+        temporary = target.with_name(target.name + ".restore")
+        try:
+            copy_file(source, temporary)
+            os.replace(temporary, target)
+        finally:
+            temporary.unlink(missing_ok=True)
 
 
 def index_path():
@@ -245,12 +261,39 @@ def original_path(path):
     return path
 
 
-def apply_files(episode, files, baseline_hashes, bundle, output):
+def register_existing_journal(episode, directory, baseline_hashes):
+    """Register relocated process records without replacing an existing history."""
+    directory = Path(directory).resolve()
+    with source_guard(episode, exclusive=True), _journal_lock(directory):
+        existing = lookup_journal(episode)
+        if existing is not None and existing.resolve() != directory:
+            raise ValueError("当前索引指向另一份重建记录，请先核对历史")
+        state = read_json(directory / "state.json")
+        if read_json(directory / "transaction.json")["status"] not in ("committed", "rolled_back"):
+            raise ValueError("存在未完成事务，请先恢复")
+        for name in FILES:
+            row = state["files"][name]
+            if (
+                row["baseline_sha256"] != baseline_hashes[name]
+                or digest(directory / "baseline" / name) != baseline_hashes[name]
+            ):
+                raise ValueError(f"原始基线缺失或损坏：{name}")
+            if digest(data_directory(episode) / name) != row["current_sha256"]:
+                raise ValueError(f"源文件被外部修改：{name}")
+        _write_index(episode, directory)
+
+
+def apply_files(episode, files, baseline_hashes, bundle, output, *, expected_current=None):
     """Replace six source files. Baseline and journal stay in the output directory."""
     episode = Path(episode)
     with source_lock(episode, output) as directory:
         recover_locked(episode)
         originals = original_files(episode)
+        if (
+            expected_current is not None
+            and {n: digest(data_directory(episode) / n) for n in FILES} != expected_current
+        ):
+            raise ValueError("准备后源文件发生变化")
         if {n: digest(p) for n, p in originals.items()} != baseline_hashes:
             raise ValueError("原始输入已变化，请重新审核")
         state_path = directory / "state.json"
@@ -300,7 +343,7 @@ def apply_files(episode, files, baseline_hashes, bundle, output):
             for name in FILES:
                 if digest(data_directory(episode) / name) != rows[name]["before"]:
                     raise ValueError(f"覆盖期间源文件发生变化：{name}")
-                os.replace(transaction / "new" / name, data_directory(episode) / name)
+                publish_file(transaction / "new" / name, data_directory(episode) / name)
             sync_directory(data_directory(episode))
             if any(digest(data_directory(episode) / n) != rows[n]["after"] for n in FILES):
                 raise ValueError("覆盖结果校验失败")

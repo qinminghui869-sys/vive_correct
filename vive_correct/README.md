@@ -32,9 +32,9 @@
 
 纯 CV 选帧只需要矫正左目视频。进入几何审核还需要上面对应的时间戳和标定。识别不回退到原始左目，视频分辨率须与标定一致。后续阶段再补这些输入：
 
-- **轴向预览**：可同步的头部、对应腕部位姿和相机外参。
-- **通过审核、导出、重建**：完整的 [六个目标 Parquet](../docs/review_rebuild.md#rebuild-and-backup)。审核提交时即校验结构。
-- **RRD**：有可用深度与内参时显示点云，缺掩码标为预览；无深度时显示 RGB 手点叠加与矫正结果；详细输入见 [RRD 说明](../ego_data/README_rerun.md#rrd-inputs)。
+- **轴向预览**：有效中心像素深度、可同步的头部和对应腕部位姿，以及相机外参。
+- **通过审核、导出、重建**：满足 [原点计算](../docs/hand_pipeline.md#depth-origin) 的深度与同步要求，并具有完整的 [六个目标 Parquet](../docs/review_rebuild.md#rebuild-and-backup)。审核提交时即校验结构。
+- **RRD**：有可用深度与内参时显示点云，缺掩码标为预览；渲染缺少深度时可回退 RGB；该回退不能替代原点矫正所需的深度。详细输入见 [RRD 说明](../ego_data/README_rerun.md#rrd-inputs)。
 
 `eye_rgb` 用于点云 RRD 的眼动展示，RGB 回退不需要它。`--initial-mount` 指定矫正左相机到头部的外参，见 [相机参数](../calibrations/README.md)。
 

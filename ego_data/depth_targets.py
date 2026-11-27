@@ -3,12 +3,6 @@
 import av
 import cv2
 import numpy as np
-import pyarrow.parquet as pq
-
-try:
-    from .depth_metadata import load_metadata
-except ImportError:
-    from depth_metadata import load_metadata
 
 DEPTH_KEY = "observation.images.depth_headband_left_rectified"
 
@@ -147,62 +141,7 @@ def depth_frame(episode, annotation, index):
 
 
 def refine_targets(episode, report):
-    from vive_correct.data.layout import annotation_dir, data_directory
+    """Compatibility import: all origin refinement now uses measured pixel depth."""
+    from ego_data.depth_origin import measured_targets
 
-    data = data_directory(episode)
-    ann = annotation_dir(episode, DEPTH_KEY)
-    result = {}
-    observations = report["observations"]
-    try:
-        meta = load_metadata(ann)
-        k = meta["intrinsics"]["left"]
-        expected = np.array([[k["fx"], 0, k["cx"]], [0, k["fy"], k["cy"]], [0, 0, 1]])
-        if not np.allclose(report["camera"]["K"], expected, atol=1e-4):
-            raise ValueError("RGB and depth intrinsics differ")
-        times = pq.read_table(data / f"{DEPTH_KEY}.parquet")["timestamp"].to_numpy()
-        selected = {}
-        for o in observations:
-            valid = np.flatnonzero(np.isfinite(times))
-            if not len(valid):
-                raise ValueError("No finite depth timestamps")
-            index = int(valid[np.argmin(np.abs(times[valid] - o["timestamp_s"]))])
-            if abs(times[index] - o["timestamp_s"]) > 0.005:
-                raise ValueError("RGB-depth timestamp gap exceeds 5 ms")
-            selected.setdefault(index, []).append(o)
-        for index, items in selected.items():
-            depth, mask = depth_frame(episode, ann, index)
-            for o in items:
-                for side, label in o["stickers"].items():
-                    key = (o["frame_index"], side)
-                    try:
-                        original = np.asarray(label["origin_camera_m"], float)
-                        target, quality = plane_center(
-                            depth,
-                            (mask > 0) & (depth <= meta["max_depth_m"]),
-                            label["image_corners_px"],
-                            k,
-                            original,
-                        )
-                        result[key] = dict(
-                            status="depth_plane_refined",
-                            origin_camera_m=target.tolist(),
-                            original_origin_camera_m=original.tolist(),
-                            depth_shift_m=float(target[2] - original[2]),
-                            quality=quality,
-                            anatomical_accuracy_validated=False,
-                        )
-                    except (ValueError, KeyError) as error:
-                        result[key] = dict(status="unverified_pnp_preview", reason=str(error))
-    except (OSError, ValueError, KeyError) as error:
-        for o in observations:
-            for side in o["stickers"]:
-                result[(o["frame_index"], side)] = dict(
-                    status="unverified_pnp_preview", reason=str(error)
-                )
-    for o in observations:
-        for side in o["stickers"]:
-            result.setdefault(
-                (o["frame_index"], side),
-                dict(status="unverified_pnp_preview", reason="Depth frame unavailable"),
-            )
-    return result
+    return measured_targets(episode, report)

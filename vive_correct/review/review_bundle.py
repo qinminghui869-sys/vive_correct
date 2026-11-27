@@ -9,7 +9,7 @@ import cv2
 import numpy as np
 import pyarrow.parquet as pq
 
-from ego_data.vive_origin_alignment import build_alignment
+from ego_data.vive_origin_alignment import build_alignment, require_depth_alignment
 from vive_correct.batch.report_io import digest
 from vive_correct.review.human_review import (
     decode_frame,
@@ -39,6 +39,7 @@ def load_bundle(store, index, calibration):
         if digest(Path(path)) != signature:
             raise ValueError("审核依据文件已变化，请重新通过审核")
     verify_provenance(read_json(bundle["report"]))
+    require_depth_alignment(read_json(bundle["alignment"]))
     return bundle
 
 
@@ -95,7 +96,7 @@ def _approve(store, index, payload, calibration):
         atomic_json(snapshot, read_json(store.path(index).with_name("human_review.json")))
         atomic_json(report_path, report)
         atomic_json(mount_path, read_json(calibration))
-        alignment = build_alignment(episode, report_path, mount_path, refine_depth=True)
+        alignment = build_alignment(episode, report_path, mount_path)
         for observation in report["observations"]:
             for side, pose in observation["stickers"].items():
                 sample = next(s for s in alignment["samples"] if s["side"] == side)
@@ -179,6 +180,7 @@ def stage_files(bundle):
     verify_provenance(read_json(bundle["report"]))
     folder = Path(bundle["directory"])
     cache = folder / "corrected_manifest.json"
+    require_depth_alignment(read_json(bundle["alignment"]))
     originals = original_files(Path(bundle["episode"]))
     if {n: digest(p) for n, p in originals.items()} != bundle["baseline_hashes"]:
         raise ValueError("原始文件已变化，请重新审核")

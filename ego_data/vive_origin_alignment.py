@@ -32,9 +32,21 @@ def pose_stream(path):
     return cached_file("pose_stream", source, read)
 
 
-def build_alignment(
-    episode, report_path, calibration_path, *, refine_depth=False, require_bilateral=True
-):
+def require_depth_alignment(alignment):
+    """Reject saved origin calibrations from the removed report/PnP position path."""
+    if (
+        alignment.get("origin_method") != "depth_pixel"
+        or not alignment.get("samples")
+        or any(
+            sample.get("depth_refinement", {}).get("status") != "depth_pixel_measured"
+            for sample in alignment["samples"]
+        )
+    ):
+        raise ValueError("旧原点校准不能复用，请用同步像素深度重新生成校准")
+
+
+def build_alignment(episode, report_path, calibration_path, *, require_bilateral=True):
+    """Backproject measured pixel depth and transform through head pose and camera mount."""
     from vive_correct.review.axis_calibration import local_rotation
 
     report = report_path if isinstance(report_path, dict) else json.loads(report_path.read_text())
@@ -67,13 +79,11 @@ def build_alignment(
         or not np.isclose(np.linalg.det(mount[:3, :3]), 1)
     ):
         raise ValueError("Camera mounting must be a finite rigid 4x4 transform")
-    refinements = {}
-    if refine_depth:
-        from ego_data.depth_targets import refine_targets
+    from ego_data.depth_origin import measured_targets
 
-        # Match single-frame browser previews even if another reference lacks depth.
-        for observation in report["observations"]:
-            refinements.update(refine_targets(episode, dict(report, observations=[observation])))
+    refinements = {}
+    for observation in report["observations"]:
+        refinements.update(measured_targets(episode, dict(report, observations=[observation])))
     samples = []
     for observation in report["observations"]:
         ts = observation["timestamp_s"]
@@ -93,12 +103,13 @@ def build_alignment(
         for side, item in observation["stickers"].items():
             if side not in ("left", "right"):
                 raise ValueError(f"Unknown hand side: {side}")
-            origin = np.asarray(item["origin_camera_m"], dtype=float)
+            refinement = refinements[(frame, side)]
+            origin = np.asarray(
+                refinement["origin_camera_m"],
+                dtype=float,
+            )
             if origin.shape != (3,) or not np.isfinite(origin).all() or origin[2] <= 0:
                 raise ValueError("Invalid camera origin")
-            refinement = refinements.get((frame, side), {"status": "pnp_preview"})
-            if refinement["status"] == "depth_plane_refined":
-                origin = np.asarray(refinement["origin_camera_m"])
             wrist = resample_tracking(
                 streams[side + "_wrist"], [ts], pose=True, sequence=sequence, degrees=degrees
             )[1][0]
@@ -160,7 +171,8 @@ def build_alignment(
     if not wrists:
         raise ValueError("No repaired wrist origins")
     return dict(
-        depth_refinement_enabled=refine_depth,
+        origin_method="depth_pixel",
+        depth_refinement_enabled=True,
         alignment_timeline=alignment_timeline,
         version=2,
         episode=str(episode.resolve()),

@@ -31,6 +31,10 @@ def export_corrected_rgb(
 ):
     episode, output = Path(episode), Path(output)
     alignment = json.loads(Path(alignment_path).read_text())
+    if any("origin_camera_m" in sample for sample in alignment.get("samples", [])):
+        from ego_data.vive_origin_alignment import require_depth_alignment
+
+        require_depth_alignment(alignment)
     if Path(alignment["episode"]).resolve() != episode.resolve():
         raise ValueError("Alignment belongs to another episode")
     data = data_directory(episode)

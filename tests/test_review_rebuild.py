@@ -393,7 +393,8 @@ class RebuildTests(unittest.TestCase):
         self.assertEqual(stats["frames"], 4)
         np.testing.assert_allclose(logged[0][0], [originals[a][0].as_py() for a in "xyz"])
         np.testing.assert_allclose(logged[1][0], expected_xyz[0])
-        row = export_approved(self.store, 0, self.mount)
+        with patch("ego_data.render_inputs.depth_available", return_value=False):
+            row = export_approved(self.store, 0, self.mount)
         self.assertEqual(row["status"], "complete", row)
         self.assertTrue(Path(row["recording"]).exists())
         with patch("vive_correct.review.review_actions.export_recordings") as render:
@@ -403,7 +404,7 @@ class RebuildTests(unittest.TestCase):
 
     def _write_meta(self):
         meta = self.episode / "meta"
-        meta.mkdir()
+        meta.mkdir(exist_ok=True)
         stats = {
             "episode_index": 0,
             "stats": {
