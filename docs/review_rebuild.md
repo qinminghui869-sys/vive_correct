@@ -62,7 +62,8 @@ python3 -m vive_correct rebuild --out outputs/ks3 --in-place
 ```bash
 python3 scripts/apply_depth_origin.py \
   --dataset "/path/to/dataset" \
-  --process-out "outputs/existing_review"
+  --process-out "outputs/existing_review" \
+  --jobs 4
 ```
 
 **执行即覆盖源文件。** 默认处理全部 episode；单条增加 `--episode episode_000004`，可重复指定。路径含中文、空格或 `+` 时加引号。
@@ -71,7 +72,7 @@ python3 scripts/apply_depth_origin.py \
 
 写回字段、基线和统计更新与 [原地重建](#rebuild-and-backup) 一致。
 
-所有选定条目计算通过后才写回，临时文件自动清理。仅在 `<process-out>/depth_origin_runs/` 保留必要执行记录，原始备份与恢复日志继续使用原有 `rebuild_state/`，常规索引会登记该位置。重复执行从原始基线计算，不叠加矫正。
+`--jobs N` 指定并行计算进程数，默认 1。各进程独立读取深度并生成修正文件；全部计算通过后，由主进程逐条事务写回，共享数据集统计串行更新。计算失败不开始写回，临时文件自动清理。仅在 `<process-out>/depth_origin_runs/` 保留必要执行记录，原始备份与恢复日志继续使用原有 `rebuild_state/`，常规索引会登记该位置。重复执行从原始基线计算，不叠加矫正。
 
 每条内部失败回滚并停止后续写入；跨 episode 不保证原子性，已完成条目保留在执行记录中。发现源数据被外部修改时拒绝覆盖。进程中断的事务可通过现有 `source_data.recover(episode)` 恢复；不要删除基线或索引绕过校验。无掩码深度仍标记 `unmasked_depth_preview`，不代表物理精度已经验证。
 

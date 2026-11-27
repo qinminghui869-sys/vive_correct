@@ -152,3 +152,18 @@ class DepthApplyTests(unittest.TestCase):
                 episodes=["episode_999999"],
             )
         self.assertEqual(self.hashes(), self.before)
+
+    def test_process_worker_matches_serial_and_cleans_staging(self):
+        serial = self.execute()
+        parallel = run(self.episode, self.process, workers=2)
+        self.assertEqual(parallel["status"], "complete")
+        self.assertEqual(
+            {n: row["sha256"] for n, row in serial["entries"][0]["files"].items()},
+            {n: row["sha256"] for n, row in parallel["entries"][0]["files"].items()},
+        )
+        self.assertFalse(list(self.process.glob(".depth_origin-*")))
+
+    def test_invalid_worker_count_does_not_write(self):
+        with self.assertRaisesRegex(ValueError, "--jobs"):
+            run(self.episode, self.process, workers=0)
+        self.assertEqual(self.hashes(), self.before)

@@ -2,6 +2,8 @@
 """Recompute depth origins from saved reviews and write six source Parquets."""
 
 import argparse
+from concurrent.futures import ProcessPoolExecutor
+import multiprocessing
 from contextlib import contextmanager
 import os
 from pathlib import Path
@@ -191,7 +193,14 @@ def prepare(job, output):
         )
 
 
-def run(dataset, process, *, episodes=None):
+def prepare_worker(job, staging):
+    row = prepare(job, staging)
+    return row, job["stamp"]
+
+
+def run(dataset, process, *, episodes=None, workers=1):
+    if workers < 1:
+        raise ValueError("--jobs 必须大于 0")
     dataset, process = Path(dataset).resolve(), Path(process).resolve()
     if process.is_relative_to(dataset):
         raise ValueError("过程目录必须位于源数据集之外")
@@ -199,6 +208,7 @@ def run(dataset, process, *, episodes=None):
         record = process / "depth_origin_runs" / f"{uuid.uuid4().hex}.json"
         manifest = dict(
             origin_method="depth_pixel",
+            workers=workers,
             production_approval_created=False,
             code_signature=export_code_signature(),
             script_sha256=digest(Path(__file__)),
@@ -215,10 +225,28 @@ def run(dataset, process, *, episodes=None):
             with TemporaryDirectory(prefix=".depth_origin-", dir=process) as staging:
                 staging = Path(staging)
                 with scoped_index(staging / "baseline_index.json", jobs):
-                    for job in jobs:
-                        print(f"计算 {episode_stem(job['episode'])}", flush=True)
-                        manifest["entries"].append(prepare(job, staging))
-                        save()
+                    if workers == 1:
+                        for job in jobs:
+                            print(f"计算 {episode_stem(job['episode'])}", flush=True)
+                            manifest["entries"].append(prepare(job, staging))
+                            save()
+                    else:
+                        with ProcessPoolExecutor(
+                            max_workers=min(workers, len(jobs)),
+                            mp_context=multiprocessing.get_context("spawn"),
+                        ) as pool:
+                            futures = [pool.submit(prepare_worker, job, staging) for job in jobs]
+                            try:
+                                for job, future in zip(jobs, futures, strict=True):
+                                    row, stamp = future.result()
+                                    job["stamp"] = stamp
+                                    manifest["entries"].append(row)
+                                    print(f"计算完成 {episode_stem(job['episode'])}", flush=True)
+                                    save()
+                            except BaseException:
+                                for future in futures:
+                                    future.cancel()
+                                raise
                 for job in jobs:
                     source_data.register_existing_journal(
                         job["episode"], job["directory"], job["approval"]["baseline_hashes"]
@@ -258,9 +286,12 @@ def main():
     parser.add_argument("--dataset", required=True, type=Path)
     parser.add_argument("--process-out", required=True, type=Path)
     parser.add_argument("--episode", action="append", help="episode_NNNNNN; repeatable")
+    parser.add_argument(
+        "--jobs", type=int, default=1, help="并行计算进程数；写回按 episode 顺序提交"
+    )
     args = parser.parse_args()
     try:
-        result = run(args.dataset, args.process_out, episodes=args.episode)
+        result = run(args.dataset, args.process_out, episodes=args.episode, workers=args.jobs)
     except (ValueError, OSError, KeyError) as error:
         parser.exit(1, f"失败：{error}\n")
     print(f"{result['status']}: {args.process_out / 'depth_origin_runs'}")
