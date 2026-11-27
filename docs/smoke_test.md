@@ -77,3 +77,12 @@ AI 需要有效的本地模型配置和网络；配置见 [AI 预审](ai_review.
 - `scripts/check.sh` 通过 297 项主测试、28 项数据工具测试。新增覆盖直接写回、原始基线复用、跨文件系统发布、失败回滚后重试、非目标字段保真及旧原点校准拒绝。
 
 本机证据位于 `outputs/depth_origin_script_validation/`，包含 `copy_direct_write.log`、`copy_validation.json` 和 `check_direct_write.log`，不随仓库分发。该记录验证功能与数值一致性，不代表独立物理精度验收。
+
+## 多进程写回验证：2026-11-27
+
+版本 `e2f2ae2`，在同一 `pour_beverage` 数据集的 8 条临时副本上使用 `--jobs 4`：
+
+- 4 个进程完成计算，主进程提交全部 8 条；48 个源 Parquet 的哈希与串行结果一致，临时文件已清理。
+- `scripts/check.sh` 通过 299 项主测试和 28 项数据工具测试，包含进程池结果一致性与非法并发数拒绝。
+
+证据位于本机 `outputs/depth_origin_script_validation/parallel_validation.json`、`parallel.log` 和 `check_parallel.log`。验证未写回生产数据；该记录不承诺其他机器或存储条件下的加速比例。

@@ -14,7 +14,7 @@ source .venv/bin/activate
 python3 -m pip install -r requirements.txt
 ```
 
-选帧需要矫正左目 RGB；原点矫正还需要同步深度、相机标定和头部/腕部位姿。二维原点经深度反投影和外参转换得到世界 XYZ，详见 [校准模型](docs/hand_pipeline.md#depth-origin)。输入格式见 [输入与配置](vive_correct/README.md#inputs)。使用自定义外参时，各阶段传入同一 `--initial-mount FILE`，见 [相机参数](calibrations/README.md)。
+选帧需要矫正左目 RGB；原点矫正还需要同步深度、标定和头部/腕部位姿，见 [输入要求](vive_correct/README.md#inputs)。使用自定义外参时，各审核与导出阶段传入同一 `--initial-mount FILE`。
 
 <a name="quick-start"></a>
 
@@ -49,9 +49,9 @@ python3 -m vive_correct rebuild --out "$OUT"
 | `repair` | 审核后导出矫正前后对照 RRD | 否 |
 | `rebuild` | 审核后另存修正 Parquet | 加 `--in-place` 才写回 |
 | `view` | 打开已有 RRD | 否 |
-| `scripts/apply_depth_origin.py` | 从历史审核和原始基线重算深度原点 | **直接写回六个 Parquet** |
+| `scripts/apply_depth_origin.py` | 从历史审核和原始基线重算，支持多进程 | **直接写回六个 Parquet** |
 
-RRD 显示模式见 [点云与 RGB 输入](ego_data/README_rerun.md#rrd-inputs)。常规导出与重建见 [操作说明](docs/review_rebuild.md)；已有原地重建记录的数据迁移见 [深度原点写回](docs/review_rebuild.md#depth-origin-writeback)。
+RRD 显示模式见 [点云与 RGB 输入](ego_data/README_rerun.md#rrd-inputs)。常规导出与重建见 [操作说明](docs/review_rebuild.md)；已有原地重建记录的数据迁移及 `--jobs` 用法见 [深度原点写回](docs/review_rebuild.md#depth-origin-writeback)。
 
 ## 文档导航
 

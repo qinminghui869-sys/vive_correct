@@ -51,13 +51,15 @@ python3 -m vive_correct rebuild --out outputs/ks3 --in-place
 
 `--in-place` 校验通过后直接替换这六个源文件，并在同一事务里更新 [数据集元数据](#dataset-metadata)。源目录不写 `.parquet.bak` 或 `.vive_rebuild/`。
 
-原始文件留在首次执行的 `<out>/rebuild_state/<样本>/baseline/`，并由 `outputs/rebuild_index.json` 登记。再次重建仍用这份基线。失败或中断会恢复六个源文件和已改的元数据。不要删除 `rebuild_state/` 或索引来绕过校验。
+原始文件留在首次执行的 `<out>/rebuild_state/<样本>/baseline/`，并由 `outputs/rebuild_index.json` 登记。再次重建仍用这份基线。写回异常会回滚六个源文件和已改的元数据；强制中断由事务日志支持恢复。不要删除 `rebuild_state/` 或索引来绕过校验。
 
 <a name="depth-origin-writeback"></a>
 
 ## 用深度原点重新矫正并写回
 
-此脚本直接更新源数据的六个 Parquet，不提供预览、RRD 导出或另存修正文件模式。输入为源数据集及保存了双手通过审核记录和原始基线的历史过程目录：
+适用于**已经原地重建、保留双手审核快照和原始基线**的数据。脚本复用审核选择，按[深度反投影规则](hand_pipeline.md#depth-origin)重算，并直接写回六个源 Parquet；字段范围见 [原地重建](#rebuild-and-backup)。
+
+**以下命令会覆盖全部 episode 的源文件。** 四个进程并行计算，写回逐条提交：
 
 ```bash
 python3 scripts/apply_depth_origin.py \
@@ -66,21 +68,26 @@ python3 scripts/apply_depth_origin.py \
   --jobs 4
 ```
 
-**执行即覆盖源文件。** 默认处理全部 episode；单条增加 `--episode episode_000004`，可重复指定。路径含中文、空格或 `+` 时加引号。
+| 参数 | 含义 | 默认值 |
+| --- | --- | --- |
+| `--dataset` | 源数据集根目录 | 必填 |
+| `--process-out` | 历史审核与重建过程目录 | 必填 |
+| `--episode` | `episode_000004` 等编号，可重复指定 | 全部 episode |
+| `--jobs` | 并行计算进程数，正整数 | `1` |
 
-脚本读取 `features/**/approval.json`、对应 `approved/` 快照、`rebuild_manifest.json` 和 `rebuild_state/` 原始基线，兼容历史机器路径迁移。它复用审核选择，按[深度反投影规则](hand_pipeline.md)重新计算，不创建新的审核通过记录。缺少原始基线、有效深度或审核材料时停止。
+过程目录须包含 `features/**/approval.json`、对应 `approved/` 快照、`rebuild_manifest.json` 和 `rebuild_state/`。支持历史路径迁移，输入和基线仍须通过校验。此脚本不要求新代码版本的审核通过记录，也不会创建它；首次重建使用常规 `rebuild`。
 
-写回字段、基线和统计更新与 [原地重建](#rebuild-and-backup) 一致。
+执行顺序为：校验全部输入 → 多进程计算临时修正文件 → 全部计算通过 → 主进程逐条写回及更新统计。`--jobs` 不控制写回并发；同一过程目录只允许运行一个实例，请使用该参数，不要用 `xargs -P` 启动多个脚本。进程数增大会增加内存和磁盘读取压力。
 
-`--jobs N` 指定并行计算进程数，默认 1。各进程独立读取深度并生成修正文件；全部计算通过后，由主进程逐条事务写回，共享数据集统计串行更新。计算失败不开始写回，临时文件自动清理。仅在 `<process-out>/depth_origin_runs/` 保留必要执行记录，原始备份与恢复日志继续使用原有 `rebuild_state/`，常规索引会登记该位置。重复执行从原始基线计算，不叠加矫正。
+正常结束或异常退出时清理临时文件，仅在 `<process-out>/depth_origin_runs/` 保留执行记录。原始备份和恢复日志沿用 `rebuild_state/`；再次执行仍从同一原始基线计算。脚本不生成 RRD、预览或永久另存的修正 Parquet。
 
-每条内部失败回滚并停止后续写入；跨 episode 不保证原子性，已完成条目保留在执行记录中。发现源数据被外部修改时拒绝覆盖。进程中断的事务可通过现有 `source_data.recover(episode)` 恢复；不要删除基线或索引绕过校验。无掩码深度仍标记 `unmasked_depth_preview`，不代表物理精度已经验证。
+计算失败时不写回。写回失败时回滚当前 episode 并停止后续提交，之前完成的 episode 保持已提交状态；以执行记录中的逐条状态为准。进程强制终止后，先核对事务日志，再通过现有 `source_data.recover(episode)` 恢复并重试。源文件被外部修改时拒绝覆盖，不应删除基线或索引绕过检查。
 
 <a name="dataset-metadata"></a>
 
 ## 数据集元数据
 
-`rebuild --in-place` 和深度原点写回脚本均在六文件事务内更新数据集 `meta/`。失败或中断会把这两份文件和六个 Parquet 一起恢复。
+`rebuild --in-place` 和深度原点写回脚本均在六文件事务内更新数据集 `meta/`。回滚时将统计文件与六个 Parquet 一起恢复。
 
 - `episodes_stats.jsonl`：重算该条的 `observation.left_wrist_pose`、`observation.right_wrist_pose`、`action`、`observation.state`、`observation.hand_left_points`、`observation.hand_right_points`。每项重算 `min`、`max`、`mean`、`std` 和 `count`。计算方式沿用这一项原来的数值，未改动的列保持原统计。其他特征不变。
 - `readme.json`：`size_bytes` 加上这六个文件的大小变化。`file_count`、`frame_count` 和其他字段不变。
