@@ -119,6 +119,8 @@ python3 -m vive_correct review --out outputs/ks3 --port 18775 \
 
 常见问题：
 
+- **GitHub 文档打不开**：若显示 “We’re having a really bad day”，文档尚未加载，属于 GitHub 服务错误；修改章节锚点不能修复。若正文能打开但未定位，再检查 URL 的 `#` 片段；本页写回入口为 `#depth-origin-writeback`。
+
 - **列表一直等待**：选帧和审核的 `--out` 是否相同，并看选帧异常。
 - **有标签却无候选**：按 [漏检排查](cv_detection.md#detection-troubleshooting) 换帧或手工补标。
 - **依据过期或版本冲突**：重新加载后再审。不要手改版本或哈希。

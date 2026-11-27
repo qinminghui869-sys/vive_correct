@@ -7,6 +7,7 @@ import subprocess
 from urllib.parse import unquote, urlsplit
 
 ROOT = Path(__file__).resolve().parents[1]
+REPOSITORY = "qinminghui869-sys/vive_correct"
 LINK = re.compile(r"!?\[[^\]\n]*\]\(\s*(<[^>]*>|[^\s)]*)(?:\s+\"[^\"]*\")?\s*\)")
 REFERENCE = re.compile(r"^\s*\[[^\]]+\]:\s*(<[^>]+>|\S+)", re.MULTILINE)
 ANCHOR = re.compile(r'<a\s+name="([^"]+)"\s*>\s*</a>')
@@ -50,9 +51,14 @@ def check(root, tracked):
                 errors.append(f"{location}: empty link")
                 continue
             url = urlsplit(value)
-            if url.scheme or url.netloc:
-                continue  # External URLs and local service URLs are not fetched by CI.
-            target = (root / name).parent / unquote(url.path) if url.path else root / name
+            prefix = f"/{REPOSITORY}/blob/main/"
+            if url.hostname == "github.com" and url.path.startswith(prefix):
+                # Validate canonical URLs shared in reviews as well as relative links.
+                target = root / unquote(url.path[len(prefix) :])
+            elif url.scheme or url.netloc:
+                continue  # Other repositories, historical revisions and services are external.
+            else:
+                target = (root / name).parent / unquote(url.path) if url.path else root / name
             try:
                 relative = target.resolve().relative_to(root.resolve()).as_posix()
             except ValueError:

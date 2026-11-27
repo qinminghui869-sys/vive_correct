@@ -72,4 +72,4 @@ npx --yes prettier@3.6.2 --write vive_correct/review/review_ui
 - 命令注明执行目录，使用 `/path/to/dataset` 表示待替换路径；覆盖源数据的命令单独列出。
 - 参数以配置和 CLI 为准；测试记录标明日期、版本、样本及未通过项，不将历史实验当作当前精度承诺。
 
-单独检查文档运行 `python3 scripts/check_docs.py`。检查覆盖 Git 跟踪的 Markdown、相对文件链接和显式锚点，不访问外部网站或本机审核服务。
+单独检查文档运行 `python3 scripts/check_docs.py`。检查覆盖 Git 跟踪的 Markdown、相对链接、指向本仓库 `blob/main/` 的完整 GitHub URL，以及显式锚点；不访问外部网站或本机审核服务。离线通过只证明仓库内目标有效，不证明 GitHub 服务当前可用。
