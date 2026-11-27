@@ -1,4 +1,4 @@
-"""Check repository Markdown links offline; section links use explicit stable IDs."""
+"""Check repository Markdown links offline; section links use GitHub-compatible named anchors."""
 
 from collections import Counter
 from pathlib import Path
@@ -9,7 +9,7 @@ from urllib.parse import unquote, urlsplit
 ROOT = Path(__file__).resolve().parents[1]
 LINK = re.compile(r"!?\[[^\]\n]*\]\(\s*(<[^>]*>|[^\s)]*)(?:\s+\"[^\"]*\")?\s*\)")
 REFERENCE = re.compile(r"^\s*\[[^\]]+\]:\s*(<[^>]+>|\S+)", re.MULTILINE)
-ANCHOR = re.compile(r'<a\s+(?:id|name)="([^"]+)"\s*>\s*</a>')
+ANCHOR = re.compile(r'<a\s+name="([^"]+)"\s*>\s*</a>')
 
 
 def prose(text):
@@ -37,6 +37,8 @@ def check(root, tracked):
     anchors = {p: Counter(ANCHOR.findall(body)) for p, body in bodies.items()}
     errors, count = [], 0
     for name, body in bodies.items():
+        for match in re.finditer(r'<a\s+id="([^"\n]+)"', body):
+            errors.append(f"{name}: use a named anchor for GitHub compatibility: #{match[1]}")
         for anchor, occurrences in anchors[name].items():
             if occurrences > 1:
                 errors.append(f"{name}: duplicate anchor #{anchor}")

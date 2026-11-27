@@ -17,7 +17,7 @@ python3 -m vive_correct review --out outputs/ks3
 
 `--jobs` 是 OpenCV 并发，`--model-jobs` 是 AI 并发，`--model-timeout` 是单次超时。一条选帧发布后就可以审核；选帧进程会等已排队的 AI 结束。`--dry-run` 不调用模型。
 
-<a id="review-scope"></a>
+<a name="review-scope"></a>
 
 ## 输入与处理边界
 

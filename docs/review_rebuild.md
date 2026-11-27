@@ -12,7 +12,7 @@
 
 排除一条已导出的数据会使索引失效，历史文件仍保留。已经覆盖到源数据的结果不会自动回滚。排队或处理中的条目要等任务结束才能改决定。
 
-<a id="export-and-view"></a>
+<a name="export-and-view"></a>
 
 ## 导出与查看
 
@@ -23,7 +23,7 @@ python3 -m vive_correct view outputs/ks3
 
 `repair` 只处理已通过且依据有效的数据，生成 RRD；`view` 打开已有录制。输入、审核、标定、代码和产物都没变时复用结果。点云、无掩码预览及 RGB 手点叠加的输入和时间线规则见 [RRD 说明](../ego_data/README_rerun.md#rrd-inputs)。
 
-<a id="rebuild-and-backup"></a>
+<a name="rebuild-and-backup"></a>
 
 ## Parquet 重建与源文件备份
 
@@ -51,7 +51,7 @@ python3 -m vive_correct rebuild --out outputs/ks3 --in-place
 
 原始文件留在首次执行的 `<out>/rebuild_state/<样本>/baseline/`，并由 `outputs/rebuild_index.json` 登记。再次重建仍用这份基线。失败或中断会恢复六个源文件和已改的元数据。不要删除 `rebuild_state/` 或索引来绕过校验。
 
-<a id="dataset-metadata"></a>
+<a name="dataset-metadata"></a>
 
 ### 数据集元数据
 
@@ -62,7 +62,7 @@ python3 -m vive_correct rebuild --out outputs/ks3 --in-place
 
 文件不存在时跳过。不改 `info.json`、`episodes.jsonl`、`tasks.jsonl`、`calibrations.jsonl`、`collect_info.jsonl`、`qc_reports.jsonl`。`hand_pose`、`hand_skeleton` 以及头、眼、肌电、脑电的统计不变。
 
-<a id="concurrency"></a>
+<a name="concurrency"></a>
 
 ## 并发与响应
 
@@ -73,7 +73,7 @@ python3 -m vive_correct review --out outputs/ks3 --port 18775 \
 
 以上是服务默认值。缓存上限不是进程内存峰值。资源紧时同时降低并发和缓存。审核队列和导出队列分开，可以切到其他条目继续操作。服务重启后，中断的任务不会自动重提。
 
-<a id="outputs-and-troubleshooting"></a>
+<a name="outputs-and-troubleshooting"></a>
 
 ## 产物与排查
 

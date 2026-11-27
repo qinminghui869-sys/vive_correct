@@ -12,7 +12,7 @@
 
 其他设备使用 `--initial-mount FILE`，选帧、审核、导出和重建保持同一份外参。该参数不会切换识别相机。
 
-<a id="pnp-axes"></a>
+<a name="pnp-axes"></a>
 
 ## PnP 建议轴
 

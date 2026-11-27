@@ -10,7 +10,7 @@ python3 -m vive_correct view /path/to/recording.rrd
 
 `view` 只打开已有录制。目录入口读 `rerun/manifest.json`；审核录制在 `repairs/<运行>/rerun/`。左右手以实体名称为准，灰色用于修正前对照。生成步骤见 [导出与查看](../docs/review_rebuild.md#export-and-view)。
 
-<a id="rrd-inputs"></a>
+<a name="rrd-inputs"></a>
 
 ## 导出模式与输入
 
@@ -30,7 +30,7 @@ RGB 叠加需要矫正左目内参、头部位姿、相机到头部外参及世�
 
 录制位置与发布流程见 [导出与查看](../docs/review_rebuild.md#export-and-view)。`render.log` 记录实际模式及时间线；同名 JSON 中的 `mode`、`frame_timeline`、`validity_mask` 或 `hand_projection` 用于排错。
 
-<a id="depth-metadata"></a>
+<a name="depth-metadata"></a>
 
 ### 深度元数据
 
@@ -56,7 +56,7 @@ Y = (v − cy) Z / fy
 
 排除零深度、声明的无效值及超出上限的深度；有掩码时再排除掩码无效区域。旧版按毫米解码，新格式显式校验毫米单位。
 
-<a id="raw-export"></a>
+<a name="raw-export"></a>
 
 ## 原始 MANUS 查看
 

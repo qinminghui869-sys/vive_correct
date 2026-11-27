@@ -72,7 +72,7 @@ feature_fast_timeout_s: 30.0
 
 显式启用跟踪时，首个可靠双手窗口假设双手未交叉且相机未镜像；初始化需连续 `tracking_window` 帧可靠关联。之后逐帧几何验收，短缺失最多用 3 帧光流桥接，桥接帧不作观测；身份不确定时输出缺失，不按半区重新命名。
 
-<a id="detection-troubleshooting"></a>
+<a name="detection-troubleshooting"></a>
 
 ## 漏检排查
 

@@ -9,7 +9,7 @@
 3. 确认物理左右手。以佩戴者本人为准，不以画面左右为准。
 4. 核对红 X、绿 Y、蓝 Z。方向不能确定时先暂存。
 
-<a id="ai-advice"></a>
+<a name="ai-advice"></a>
 
 ## AI 建议（可选）
 
@@ -23,7 +23,7 @@
 
 建议的生成规则见 [AI 预审](ai_review.md)。
 
-<a id="adjustments"></a>
+<a name="adjustments"></a>
 
 ## 调整图像与方向
 

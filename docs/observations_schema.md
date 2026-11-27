@@ -2,7 +2,7 @@
 
 本文只定义坐标、审核记录和预览接口。操作见 [审核指南](user_guide.md)，整段变换见 [校准模型](hand_pipeline.md#rigid-calibration)。模型交付报告和人工依据包同名 `observations.json`，schema 不同，不能混用。
 
-<a id="coordinates"></a>
+<a name="coordinates"></a>
 
 ## 坐标约定
 
@@ -27,7 +27,7 @@
 
 角度必须是三个有限数，采用本地内禀 XYZ，`C = Rx(α) Ry(β) Rz(γ)`，右乘源腕部旋转。绕当前轴按钮使用 `C_new = C × R_axis(Δ)` 合成，再转为等效内禀 XYZ 角；手动输入与四角校正使用相同字段；零角度表示恢复源方向。schema 2 加载时保留选择并默认零角度，必须重新审核。
 
-<a id="ai-record"></a>
+<a name="ai-record"></a>
 
 ## AI 建议记录
 
@@ -64,7 +64,7 @@
 
 `episode` 是去重键；路径由服务端生成。原因可为空，`review_revision` 表示拒绝时已有人工记录的版本。接口返回 `status="excluded"`、`approved=false` 与 `exclusion` 记录；已排除条目不能用普通保存或通过接口恢复。清单原子写入并同步落盘，先记录排除再使旧输出索引失效。
 
-<a id="approval-bundle"></a>
+<a name="approval-bundle"></a>
 
 ## 依据包
 
@@ -90,7 +90,7 @@
 
 接口仅服务本机会话。POST 请求使用 `Content-Type: application/json` 和页面下发的 `X-Review-Token`。数据 `id` 由持久化目录分配，只追加，不随新结果或服务重启重排。
 
-<a id="axis-preview"></a>
+<a name="axis-preview"></a>
 
 ### 只读轴向预览
 

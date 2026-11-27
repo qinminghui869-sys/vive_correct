@@ -2,7 +2,7 @@
 
 本文定义修正与同步算法。浏览器审核修正已有世界坐标手点；独立 MANUS 工具从局部骨架重建手点，两条路径不能叠用。操作入口见 [人工审核](user_guide.md) 与 [RRD 说明](../ego_data/README_rerun.md)。
 
-<a id="rigid-calibration"></a>
+<a name="rigid-calibration"></a>
 
 ## 标签刚性绑定
 
@@ -30,7 +30,7 @@ q′(t) = p′(t) + R(t)C R(t)ᵀ(q(t) − p(t))
 
 默认 `C` 为单位矩阵。手动输入与“四角校正”均保存为同一角度字段；四角校正取同一个 PnP 标签平面，以 `C = R_source_cameraᵀ R_corner_camera` 换算，不改变中心。操作约定见 [方向调整](user_guide.md#adjustments)。
 
-<a id="synchronization"></a>
+<a name="synchronization"></a>
 
 ### 同步与字段保真
 
@@ -43,7 +43,7 @@ q′(t) = p′(t) + R(t)C R(t)ᵀ(q(t) − p(t))
 
 深度精修要求 RGB 与深度时间差不超过 5 ms；有效点、覆盖率或平面残差检查失败时保留 PnP，记录 `unverified_pnp_preview`。骨架与点云仅在同一坐标系叠加，不将关节吸附到最近点云。
 
-<a id="manus-reconstruction"></a>
+<a name="manus-reconstruction"></a>
 
 ## 独立 MANUS 重建
 

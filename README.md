@@ -16,7 +16,7 @@ python3 -m pip install -r requirements.txt
 
 输入格式见 [输入与配置](vive_correct/README.md#inputs)。使用自定义外参时，各阶段传入同一 `--initial-mount FILE`，见 [相机参数](calibrations/README.md)。
 
-<a id="quick-start"></a>
+<a name="quick-start"></a>
 
 ## 快速开始
 

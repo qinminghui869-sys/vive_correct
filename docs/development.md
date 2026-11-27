@@ -43,7 +43,7 @@
 - JSON 不允许 NaN。事务登记需同步文件和目录。
 - RRD 导出范围和覆盖校验必须使用实际渲染模式的时间线，见 [RRD 输入](../ego_data/README_rerun.md#rrd-inputs)。RGB 回退读取已修正文件，不重复施加校准；无掩码点云仅供渲染，不放宽审核深度精修的有效性要求。
 
-<a id="checks"></a>
+<a name="checks"></a>
 
 ## 检查与验证
 
@@ -67,7 +67,7 @@ npx --yes prettier@3.6.2 --write vive_correct/review/review_ui
 
 - README 只保留上手步骤和导航；操作、接口、实现约束分别维护，交叉引用代替重复说明。
 - 文件链接使用仓库内相对路径，目标必须纳入 Git；本地配置、生成产物和机器路径用代码文本，不做文件链接。
-- 章节链接使用显式、稳定的英文锚点，例如 `<a id="rebuild-and-backup"></a>` 对应 `#rebuild-and-backup`。修改标题时保留锚点。
+- 章节链接使用显式、稳定的英文锚点，例如 `<a name="rebuild-and-backup"></a>` 对应 `#rebuild-and-backup`。修改标题时保留锚点；不要改成 `id`，GitHub 会重写它，导致片段链接无法定位。
 - 命令注明执行目录，使用 `/path/to/dataset` 表示待替换路径；覆盖源数据的命令单独列出。
 - 参数以配置和 CLI 为准；测试记录标明日期、版本、样本及未通过项，不将历史实验当作当前精度承诺。
 

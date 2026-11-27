@@ -2,7 +2,7 @@
 
 安装和日常命令见 [项目首页](../README.md)。完整参数用 `python3 -m vive_correct <命令> --help`。
 
-<a id="inputs"></a>
+<a name="inputs"></a>
 
 ## 输入要求
 
@@ -38,7 +38,7 @@
 
 `eye_rgb` 用于点云 RRD 的眼动展示，RGB 回退不需要它。`--initial-mount` 指定矫正左相机到头部的外参，见 [相机参数](../calibrations/README.md)。
 
-<a id="configuration"></a>
+<a name="configuration"></a>
 
 ## 配置与优先级
 
@@ -61,7 +61,7 @@
 
 本地模型配置缺失时，复制 [openai.example.json](openai.example.json) 为 `vive_correct/openai.local.json` 并填写密钥。该文件已被 Git 忽略，不要提交。
 
-<a id="model-pipeline"></a>
+<a name="model-pipeline"></a>
 
 ## 独立模型候选流程
 
